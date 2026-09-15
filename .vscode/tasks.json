@@ -1,0 +1,39 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build maze",
+            "type": "shell",
+            "options": { "cwd": "${workspaceFolder}/src" },
+            "command": "gcc",
+            "args": [
+                "-o", "../maze.exe",
+                "-std=gnu99", "-O2",
+                "-I.", "-ILinkedlist",
+                "maze.c", "map.c", "solution.c", "event.c",
+                "Interface.c", "file.c", "filedialog.c",
+                "particle.c", "enemy.c", "item.c", "fog.c",
+                "level.c", "audio.c", "save.c", "fpview.c",
+                "Linkedlist/linkedlist.c",
+                "-lraylib", "-lopengl32", "-lgdi32", "-lwinmm",
+                "-lcomdlg32", "-lshell32"
+            ],
+            "group": {"kind": "build", "isDefault": true},
+            "problemMatcher": ["$gcc"]
+        },
+        {
+            "label": "run maze",
+            "type": "shell",
+            "command": "./maze.exe",
+            "dependsOn": "build maze",
+            "problemMatcher": []
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "Remove-Item",
+            "args": ["maze.exe", "-ErrorAction", "SilentlyContinue"],
+            "problemMatcher": []
+        }
+    ]
+}

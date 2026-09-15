@@ -1,0 +1,67 @@
+# Project: ×ßÃÔ¹¬
+# Makefile created by Dev-C++ 5.11
+
+CPP      = g++.exe
+CC       = gcc.exe
+WINDRES  = windres.exe
+OBJ      = libgraphics/exceptio.o libgraphics/genlib.o libgraphics/graphics.o libgraphics/random.o libgraphics/simpio.o libgraphics/strlib.o Linkedlist/linkedlist.o simpleGUI/imgui.o maze.o map.o event.o Interface.o solution.o file.o
+LINKOBJ  = libgraphics/exceptio.o libgraphics/genlib.o libgraphics/graphics.o libgraphics/random.o libgraphics/simpio.o libgraphics/strlib.o Linkedlist/linkedlist.o simpleGUI/imgui.o maze.o map.o event.o Interface.o solution.o file.o
+LIBS     = -L"C:/Program Files (x86)/Dev-Cpp/MinGW64/lib" -L"C:/Program Files (x86)/Dev-Cpp/MinGW64/x86_64-w64-mingw32/lib" -mwindows
+INCS     = -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/x86_64-w64-mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include" -Ilibgraphics -ILinkedlist -IsimpleGUI
+CXXINCS  = -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/x86_64-w64-mingw32/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include" -I"C:/Program Files (x86)/Dev-Cpp/MinGW64/lib/gcc/x86_64-w64-mingw32/4.9.2/include/c++" -Ilibgraphics -ILinkedlist -IsimpleGUI
+BIN      = maze.exe
+CXXFLAGS = $(CXXINCS) 
+CFLAGS   = $(INCS) 
+RM       = rm.exe -f
+
+.PHONY: all all-before all-after clean clean-custom
+
+all: all-before $(BIN) all-after
+
+clean: clean-custom
+	${RM} $(OBJ) $(BIN)
+
+$(BIN): $(OBJ)
+	$(CC) $(LINKOBJ) -o $(BIN) $(LIBS)
+
+libgraphics/exceptio.o: libgraphics/exceptio.c
+	$(CC) -c libgraphics/exceptio.c -o libgraphics/exceptio.o $(CFLAGS)
+
+libgraphics/genlib.o: libgraphics/genlib.c
+	$(CC) -c libgraphics/genlib.c -o libgraphics/genlib.o $(CFLAGS)
+
+libgraphics/graphics.o: libgraphics/graphics.c
+	$(CC) -c libgraphics/graphics.c -o libgraphics/graphics.o $(CFLAGS)
+
+libgraphics/random.o: libgraphics/random.c
+	$(CC) -c libgraphics/random.c -o libgraphics/random.o $(CFLAGS)
+
+libgraphics/simpio.o: libgraphics/simpio.c
+	$(CC) -c libgraphics/simpio.c -o libgraphics/simpio.o $(CFLAGS)
+
+libgraphics/strlib.o: libgraphics/strlib.c
+	$(CC) -c libgraphics/strlib.c -o libgraphics/strlib.o $(CFLAGS)
+
+Linkedlist/linkedlist.o: Linkedlist/linkedlist.c
+	$(CC) -c Linkedlist/linkedlist.c -o Linkedlist/linkedlist.o $(CFLAGS)
+
+simpleGUI/imgui.o: simpleGUI/imgui.c
+	$(CC) -c simpleGUI/imgui.c -o simpleGUI/imgui.o $(CFLAGS)
+
+maze.o: maze.c
+	$(CC) -c maze.c -o maze.o $(CFLAGS)
+
+map.o: map.c
+	$(CC) -c map.c -o map.o $(CFLAGS)
+
+event.o: event.c
+	$(CC) -c event.c -o event.o $(CFLAGS)
+
+Interface.o: Interface.c
+	$(CC) -c Interface.c -o Interface.o $(CFLAGS)
+
+solution.o: solution.c
+	$(CC) -c solution.c -o solution.o $(CFLAGS)
+
+file.o: file.c
+	$(CC) -c file.c -o file.o $(CFLAGS)

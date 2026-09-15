@@ -1,0 +1,36 @@
+# Build artifacts
+*.exe
+*.o
+*.obj
+*.gch
+*.out
+
+# Runtime save data (generated locally)
+*.dat
+highscores.txt
+maze_save.bin
+
+# Editor / IDE
+.vs/
+*.user
+*.suo
+*.sln.docstates
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local backups (not part of the project)
+maze_raylib - 副本/
+*- 副本/
+backup/
+
+# Legacy build artifacts (keep sources, ignore binaries)
+legacy/**/*.o
+legacy/**/*.exe
+legacy/**/*.gch
+legacy/**/*.layout
+legacy/**/*.d
+legacy/**/*.dev
+legacy/**/*.bmp
