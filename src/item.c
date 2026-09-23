@@ -63,17 +63,6 @@ void UseItem(int type)
     }
 }
 
-const char* ItemName(int type)
-{
-    switch (type) {
-        case ITEM_BOMB:  return "Bomb";
-        case ITEM_SPEED: return "Speed Boots";
-        case ITEM_SHIELD: return "Shield";
-        case ITEM_TORCH: return "Torch";
-        default: return "?";
-    }
-}
-
 static void DrawBomb(int px, int py, float cs, float t)
 {
     float cx = px + cs / 2;
@@ -122,6 +111,13 @@ static void DrawTorch(int px, int py, float cs, float t)
     DrawCircle((int)cx, (int)(cy - cs*0.1), cs * 0.25f, (Color){255, 150, 30, 40});
 }
 
+void UpdateItems(float dt)
+{
+    for (int i = 0; i < itemCount; i++) {
+        if (items[i].active) items[i].animTime += dt;
+    }
+}
+
 void DrawItems(void)
 {
     for (int i = 0; i < itemCount; i++) {
@@ -130,7 +126,6 @@ void DrawItems(void)
         double px = gridOffsetX + (items[i].y - 1) * cellSize;
         double py = gridOffsetY + (items[i].x - 1) * cellSize;
         float cs = (float)cellSize;
-        items[i].animTime += GetFrameTime();
         switch (items[i].type) {
             case ITEM_BOMB:   DrawBomb((int)px, (int)py, cs, items[i].animTime); break;
             case ITEM_SPEED:  DrawSpeedBoots((int)px, (int)py, cs, items[i].animTime); break;

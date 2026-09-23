@@ -24,7 +24,7 @@ void InitItems(void);
 void SpawnItem(int x, int y, int type);
 void CheckItemPickup(void);
 void UseItem(int type);
+void UpdateItems(float dt);
 void DrawItems(void);
-const char* ItemName(int type);
 
 #endif

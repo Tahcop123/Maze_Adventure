@@ -8,7 +8,6 @@
 #include <time.h>
 #include <math.h>
 
-#include "linkedlist.h"
 #include "map.h"
 #include "solution.h"
 #include "interface.h"
@@ -100,9 +99,6 @@ extern int doorExists[3];
 extern float shakeAmount;
 extern float shakeTime;
 
-// Weather (0=none,1=dust,2=rain)
-extern int weatherType;
-
 // Game over reason (0=HP,1=time,2=enemy)
 extern int gameOverReason;
 
@@ -136,6 +132,17 @@ extern float fpPlaneX, fpPlaneY;
 extern float fpPosX, fpPosY;
 extern float fpMoveSpeed;
 extern int fpMouseLook;
+
+// ========== Pending UI actions ==========
+// Win32 file dialogs are modal and block the frame loop: buttons and hotkeys
+// only record the request here; the main loop performs it at a clean frame
+// boundary before drawing.
+typedef enum {
+    PENDING_NONE = 0,
+    PENDING_SAVE_MAP = 1,
+    PENDING_OPEN_MAP = 2
+} PendingAction;
+extern PendingAction pendingAction;
 
 // ========== Helper Functions ==========
 void TriggerShake(float amount, float duration);

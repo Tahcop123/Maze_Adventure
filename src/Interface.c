@@ -1,13 +1,9 @@
 #include "inc.h"
 #include "interface.h"
-#include "file.h"
 #include <string.h>
 #include <stdio.h>
 
 int is_edit = 0;
-int is_file = 0;
-int is_e = 0;
-int is_help = 0;
 
 static bool PointInRect(int px, int py, int rx, int ry, int rw, int rh)
 {
@@ -40,7 +36,7 @@ void DrawHp(void)
     DrawCircle(hx + 15, hy + 8, 6, RED);
     DrawTriangle((Vector2){(float)(hx-1), (float)(hy+10)}, (Vector2){(float)(hx+22), (float)(hy+10)}, (Vector2){(float)(hx+10), (float)(hy+22)}, RED);
     char hpStr[32];
-    sprintf(hpStr, "HP:%d", Hp);
+    snprintf(hpStr, sizeof(hpStr), "HP:%d", Hp);
     DrawText(hpStr, hx + 30, hy + 4, 16, MAROON);
 
     // Stamina bar
@@ -50,17 +46,17 @@ void DrawHp(void)
 
     // Score
     char scoreStr[32];
-    sprintf(scoreStr, "Score:%d", score);
+    snprintf(scoreStr, sizeof(scoreStr), "Score:%d", score);
     DrawText(scoreStr, hx + 195, hy + 4, 16, (Color){255, 215, 0, 255});
 
     // Level
     char lvlStr[16];
-    sprintf(lvlStr, "Lvl:%d", currentLevel + 1);
+    snprintf(lvlStr, sizeof(lvlStr), "Lvl:%d", currentLevel + 1);
     DrawText(lvlStr, hx + 300, hy + 4, 16, (Color){150, 200, 255, 255});
 
     // Steps
     char stepStr[16];
-    sprintf(stepStr, "Steps:%d", step);
+    snprintf(stepStr, sizeof(stepStr), "Steps:%d", step);
     DrawText(stepStr, hx + 365, hy + 4, 16, DARKGRAY);
 
     // Key status
@@ -80,19 +76,10 @@ void DrawTopBar(void)
     }
     rx -= 8;
     rx -= 70;
-    if (Button(rx, by, 70, bh, "Open", (Color){100,150,220,255}, WHITE)) {
-        Openfile();
-        InitMapEntities(); InitEnemies(); InitItems();
-        CreatWalllist(); InitFog();
-        X = Y = 2; step = 0; is_key = 0;
-        is_start = 0; OptimalSolution();
-        if (shortstep <= 0) shortstep = 50;
-        Hp = shortstep * 2;
-        UpdateFog();
-    }
+    if (Button(rx, by, 70, bh, "Open", (Color){100,150,220,255}, WHITE)) pendingAction = PENDING_OPEN_MAP;
     rx -= 8;
     rx -= 70;
-    if (Button(rx, by, 70, bh, "Save", (Color){100,180,100,255}, WHITE)) Savefile();
+    if (Button(rx, by, 70, bh, "Save", (Color){100,180,100,255}, WHITE)) pendingAction = PENDING_SAVE_MAP;
     rx -= 8;
     rx -= 90;
     if (Button(rx, by, 90, bh, is_edit ? "Editing..." : "Edit(F3)", is_edit ? (Color){220,100,100,255} : (Color){200,200,200,255}, BLACK)) is_edit = !is_edit;
@@ -113,18 +100,20 @@ void DrawTopBar(void)
 
 void DrawInterface(void)
 {
-    // Background gradient
-    for (int y = 0; y < screenHeight; y++) {
-        float t = (float)y / screenHeight;
-        DrawLine(0, y, screenWidth, y, (Color){(unsigned char)(20+t*30), (unsigned char)(15+t*25), (unsigned char)(40+t*40), 255});
+    // Background gradient: a 1x2 texture stretched over the screen gives the
+    // exact same linear gradient without drawing one line per scanline
+    static Texture2D menuBgTex = {0};
+    if (menuBgTex.id == 0) {
+        Image img = GenImageColor(1, 2, (Color){20, 15, 40, 255});
+        ImageDrawPixel(&img, 0, 1, (Color){50, 40, 80, 255});
+        menuBgTex = LoadTextureFromImage(img);
+        UnloadImage(img);
     }
-    // Torch flicker particles in menu
-    if (rand() % 3 == 0) {
-        SpawnParticle(rand() % screenWidth, screenHeight * 0.3f + rand() % (int)(screenHeight*0.4f),
-                      (float)(rand()%100-50)/50.0f, -1.0f - (float)(rand()%50)/50.0f,
-                      1.5f, 3.0f, (Color){255, 150+rand()%80, 50, 200});
-    }
-    UpdateParticles();
+    DrawTexturePro(menuBgTex,
+                   (Rectangle){0, 0, 1, 2},
+                   (Rectangle){0, 0, (float)screenWidth, (float)screenHeight},
+                   (Vector2){0, 0}, 0, WHITE);
+    // Torch flicker particles are spawned/updated in the main loop (STATE_MENU)
     DrawParticles();
 
     const char *title = "MAZE ADVENTURE";
@@ -137,6 +126,7 @@ void DrawInterface(void)
     // make a later button also register as pressed and overwrite gameState.
     if (Button(bx, by, bw, bh, "Start Game", (Color){50, 150, 80, 255}, WHITE)) {
         mapSeed = 0; // roll a fresh seed; selected difficulty picks the start level
+        score = 0;   // fresh run (kept across NextLevel, reset on new run/retry)
         StartLevel(difficulty);
         gameState = STATE_MAZE;
         return;
@@ -238,7 +228,7 @@ void DrawLeaderboard(void)
         if (highScores[i].score <= 0) continue;
         int y = 135 + i * 32;
         char line[128];
-        sprintf(line, "%-6d %-7d %-7d %-7d %s", i+1, highScores[i].score, highScores[i].steps, highScores[i].level+1, highScores[i].name);
+        snprintf(line, sizeof(line), "%-6d %-7d %-7d %-7d %s", i+1, highScores[i].score, highScores[i].steps, highScores[i].level+1, highScores[i].name);
         Color c = (i == 0) ? GOLD : (i == 1) ? (Color){200,200,200,255} : (i == 2) ? (Color){205,127,50,255} : WHITE;
         DrawText(line, bx, y, 16, c);
     }
@@ -283,6 +273,7 @@ void DrawHelp(void)
         "2 - Use Speed Boots (10s no HP cost)",
         "3 - Use Shield (block next damage)",
         "4 - Use Torch (15s expanded vision)",
+        "M - Toggle music on/off",
         "P / Esc - Pause game",
         "F3 - Toggle map edit mode",
         "F2 - New map | F5 - Save map | F9 - Open map",
@@ -294,7 +285,7 @@ void DrawHelp(void)
         "Ice tiles make you slide until you hit a wall.",
     };
     int y = 80;
-    for (int i = 0; i < 17; i++) {
+    for (int i = 0; i < 18; i++) {
         DrawText(lines[i], 80, y, 17, (Color){220, 225, 240, 255});
         y += 28;
     }

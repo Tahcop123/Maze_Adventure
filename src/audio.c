@@ -1,17 +1,42 @@
 #include "inc.h"
 #include "audio.h"
 
+// Small polyphonic mixer: previously a single global voice state was reused
+// for every sound, so two-tone effects (key, coin, win/lose jingles, ...)
+// had their first tone immediately overwritten by the second.
+
+#define MAX_VOICES 8
+
+typedef struct {
+    int active;
+    int type;       // 0=sine, 1=square, 2=noise
+    float freq;
+    float t;
+    float duration;
+    float volume;
+} Voice;
+
 static AudioStream audioStream;
-static float sfxFreq = 0;
-static float sfxDuration = 0;
-static float sfxTime = 0;
-static int sfxType = 0;
-static float sfxVolume = 0.3f;
+static Voice voices[MAX_VOICES];
+static float sampleRate = 44100.0f;
 
 // BGM state
 static int bgmEnabled = 1;
 static int bgmNoteIdx = 0;
 static float bgmNoteTime = 0;
+
+// The audio callback runs on its own thread: it must not call rand()
+// (thread-safety, and it would desync the game's seeded map RNG). A private
+// xorshift32 PRNG generates the noise timbre instead.
+static unsigned int noiseState = 0x9E3779B9u;
+
+static float NoiseSample(void)
+{
+    noiseState ^= noiseState << 13;
+    noiseState ^= noiseState >> 17;
+    noiseState ^= noiseState << 5;
+    return ((noiseState & 0xFFFF) / 32768.0f) - 1.0f;
+}
 
 // Simple melody (frequencies in Hz) - minor key adventure theme
 static float bgmMelody[] = {
@@ -25,20 +50,23 @@ static int bgmMelodyLen = 32;
 static void MyAudioCallback(void *buffer, unsigned int frames)
 {
     float *d = (float*)buffer;
-    float sampleRate = 44100.0f;
 
     for (unsigned int i = 0; i < frames; i++) {
         float sample = 0;
 
-        // SFX
-        if (sfxTime < sfxDuration && sfxFreq > 0) {
-            float t = sfxTime;
-            if (sfxType == 0) sample += sinf(2 * PI * sfxFreq * t);
-            else if (sfxType == 1) sample += (sinf(2 * PI * sfxFreq * t) > 0) ? 1.0f : -1.0f;
-            else sample += (float)(rand() % 1000) / 500.0f - 1.0f;
-            float env = 1.0f - (sfxTime / sfxDuration);
-            sample *= env * sfxVolume;
-            sfxTime += 1.0f / sampleRate;
+        // Mix every active SFX voice
+        for (int v = 0; v < MAX_VOICES; v++) {
+            Voice *vo = &voices[v];
+            if (!vo->active) continue;
+            float s;
+            if (vo->type == 0) s = sinf(2 * PI * vo->freq * vo->t);
+            else if (vo->type == 1) s = (sinf(2 * PI * vo->freq * vo->t) > 0) ? 1.0f : -1.0f;
+            else s = NoiseSample();
+            float env = 1.0f - (vo->t / vo->duration);
+            if (env < 0) env = 0;
+            sample += s * env * vo->volume;
+            vo->t += 1.0f / sampleRate;
+            if (vo->t >= vo->duration) vo->active = 0;
         }
 
         // BGM
@@ -70,11 +98,22 @@ static void MyAudioCallback(void *buffer, unsigned int frames)
 
 static void PlayTone(float freq, float duration, int type, float vol)
 {
-    sfxFreq = freq;
-    sfxDuration = duration;
-    sfxTime = 0;
-    sfxType = type;
-    sfxVolume = vol;
+    Voice *pick = NULL;
+    for (int v = 0; v < MAX_VOICES; v++) {
+        if (!voices[v].active) { pick = &voices[v]; break; }
+    }
+    if (!pick) {
+        // All voices busy: steal the one closest to finishing
+        pick = &voices[0];
+        for (int v = 1; v < MAX_VOICES; v++)
+            if (voices[v].t > pick->t) pick = &voices[v];
+    }
+    pick->active = 1;
+    pick->type = type;
+    pick->freq = freq;
+    pick->t = 0;
+    pick->duration = duration;
+    pick->volume = vol;
 }
 
 void InitAudio(void)
@@ -91,6 +130,9 @@ void CloseAudioSys(void)
     UnloadAudioStream(audioStream);
     CloseAudioDevice();
 }
+
+void ToggleBGM(void) { bgmEnabled = !bgmEnabled; }
+int IsBGMOn(void) { return bgmEnabled; }
 
 void PlayMoveSound(void) { PlayTone(300, 0.05f, 1, 0.15f); }
 void PlayKeySound(void) { PlayTone(880, 0.15f, 0, 0.3f); PlayTone(1100, 0.2f, 0, 0.25f); }

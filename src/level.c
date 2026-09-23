@@ -25,7 +25,6 @@ void StartLevel(int level)
     gridOffsetY = 60.0;
 
     CreatMap();
-    CreatWalllist();
     InitMapEntities();
     InitEnemies();
     InitItems();
@@ -40,12 +39,12 @@ void StartLevel(int level)
     if (selectedCharacter == CHAR_ROGUE) rogueFreeSteps = 10;
 
     stamina = maxStamina;
-    score = 0;
+    // NOTE: score is intentionally NOT reset here - it accumulates across
+    // NextLevel(). Fresh runs / retries reset it at their call sites.
     step = 0;
     coinsCollected = 0;
     gemsCollected = 0;
     is_key = 0;
-    is_start = 0;
     shieldActive = 0;
     speedBoostTime = 0;
     torchBoostTime = 0;
@@ -66,6 +65,27 @@ void StartLevel(int level)
     InitFog();
     UpdateFog();
     InitParticles();
+}
+
+// Reset gameplay state after loading a map file (Open button / F9).
+// Shared by all map-load entry points so they cannot drift apart.
+void LoadMapAndReset(void)
+{
+    cellSize = (double)fmin((screenWidth - 220.0) / Col, (screenHeight - 120.0) / Row);
+    gridOffsetX = (screenWidth - Col * cellSize) / 2.0 - 50.0;
+    gridOffsetY = 60.0;
+    InitMapEntities();
+    InitEnemies();
+    InitItems();
+    InitFog();
+    X = Y = 2;
+    step = 0;
+    is_key = 0;
+    MarkMazeDirty();
+    OptimalSolution();
+    if (shortstep <= 0) shortstep = 50;
+    Hp = shortstep * 2;
+    UpdateFog();
 }
 
 void NextLevel(void)

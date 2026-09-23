@@ -14,8 +14,10 @@ int can_go(int x, int y)
 {
     if (x > 0 && x <= Row && y > 0 && y <= Col) {
         int v = map[x][y];
-        int walkable = (v == 0 || v == 2 || v == 5 || v == 4 ||
-                        (v >= 6 && v <= 8) || v == 20 || v == 21);
+        int walkable = (v == CELL_ROAD || v == CELL_KEY || v == CELL_EXIT ||
+                        v == CELL_START ||
+                        (v >= CELL_KEY_RED && v <= CELL_KEY_GREEN) ||
+                        v == CELL_COIN || v == CELL_GEM);
         if (walkable && !visit[x][y]) return 1;
     }
     return 0;

@@ -1,14 +1,5 @@
 #include "inc.h"
-#include "map.h"
 #include "particle.h"
-#include <rlgl.h>
-#include <stdlib.h>
-#include <time.h>
-#include <math.h>
-#include <string.h>
-
-linkedlistADT Wall = NULL;
-WallT curwall = NULL;
 
 int Row = 20, Col = 30;
 int map[100][100];
@@ -16,11 +7,9 @@ int map_change[100][100];
 int direction[4][2] = {{0,-1},{0,1},{1,0},{-1,0}};
 int is_key = 0;
 int X = 2, Y = 2;
-int xk, yk;
+int xk = -1, yk = -1;
 int Hp = 0;
-int is_start = 0;
 int step = 0;
-int start = 0, end = 0;
 
 double cellSize = 32.0;
 double gridOffsetX = 0.0;
@@ -53,15 +42,142 @@ int hiddenRoomFound = 0;
 // Ice map
 int iceMap[100][100];
 
+// Cached feature positions (refreshed whenever the maze layer is re-baked)
+int endCellX = -1, endCellY = -1;
+int startCellX = -1, startCellY = -1;
+BonusCell bonusCells[32];
+int bonusCellCount = 0;
+static int colorKeyPos[3][2] = {{-1,-1},{-1,-1},{-1,-1}};
+static int colorDoorPos[3][2] = {{-1,-1},{-1,-1},{-1,-1}};
+
 static float walkBob = 0.0f;
 
+// ========== Baked static layers ==========
+// The floor/wall maze layer and the fog-of-war layer change rarely, so they
+// are rendered into textures and re-baked only when marked dirty. This turns
+// thousands of per-frame primitives into two textured quads.
+static RenderTexture2D mazeRT = {0};
+static RenderTexture2D fogRT = {0};
+static int mazeDirty = 1;
+static unsigned int mazeVersion = 0;
+
+// Radial glow gradient shared by all light sources (baked once)
+static Texture2D glowTex = {0};
+
+void MarkMazeDirty(void)
+{
+    mazeDirty = 1;
+    mazeVersion++;
+}
+
+unsigned int GetMazeVersion(void)
+{
+    return mazeVersion;
+}
+
+int ScreenToCell(double mx, double my, int *gx, int *gy)
+{
+    int j = (int)floor((mx - gridOffsetX) / cellSize) + 1;
+    int i = (int)floor((my - gridOffsetY) / cellSize) + 1;
+    if (i < 1 || i > Row || j < 1 || j > Col) return 0;
+    *gx = i;
+    *gy = j;
+    return 1;
+}
+
+static void BakeGlowTexture(void)
+{
+    if (glowTex.id != 0) return;
+    const int S = 128;
+    Image img = GenImageColor(S, S, BLANK);
+    Color *px = (Color*)img.data;
+    float half = S / 2.0f;
+    for (int y = 0; y < S; y++) {
+        for (int x = 0; x < S; x++) {
+            float dx = (x + 0.5f - half) / half;
+            float dy = (y + 0.5f - half) / half;
+            float d = sqrtf(dx*dx + dy*dy);
+            float a = 1.0f - d;
+            if (a < 0) a = 0;
+            a = a * a * (3.0f - 2.0f * a); // smoothstep falloff
+            px[y*S + x] = (Color){255, 255, 255, (unsigned char)(a * 255.0f)};
+        }
+    }
+    glowTex = LoadTextureFromImage(img);
+    UnloadImage(img);
+}
+
+static void EnsureMazeRT(void)
+{
+    int w = (int)(Col * cellSize) + 2;
+    int h = (int)(Row * cellSize) + 2;
+    if (mazeRT.texture.id == 0 || mazeRT.texture.width < w || mazeRT.texture.height < h) {
+        if (mazeRT.texture.id != 0) UnloadRenderTexture(mazeRT);
+        mazeRT = LoadRenderTexture(w, h);
+        mazeDirty = 1;
+    }
+    if (fogRT.texture.id == 0 || fogRT.texture.width < w || fogRT.texture.height < h) {
+        if (fogRT.texture.id != 0) UnloadRenderTexture(fogRT);
+        fogRT = LoadRenderTexture(w, h);
+        MarkFogDirty();
+    }
+}
+
+static void BakeGlowRadial(double px, double py, double radius, Color tint)
+{
+    Rectangle src = {0, 0, (float)glowTex.width, (float)glowTex.height};
+    Rectangle dst = {(float)(px - radius), (float)(py - radius),
+                     (float)(radius * 2), (float)(radius * 2)};
+    DrawTexturePro(glowTex, src, dst, (Vector2){0, 0}, 0, tint);
+}
+
+// Scan the map once and cache the positions of everything rendered per-frame,
+// so neither the top-down nor the FP renderer needs to sweep the grid.
+static void CacheMapPoints(void)
+{
+    startCellX = startCellY = endCellX = endCellY = -1;
+    for (int d = 0; d < 3; d++) {
+        colorKeyPos[d][0] = colorKeyPos[d][1] = -1;
+        colorDoorPos[d][0] = colorDoorPos[d][1] = -1;
+    }
+    bonusCellCount = 0;
+
+    for (int i = 1; i <= Row; i++) {
+        for (int j = 1; j <= Col; j++) {
+            int v = map_change[i][j];
+            switch (v) {
+                case CELL_START: startCellX = i; startCellY = j; break;
+                case CELL_EXIT:  endCellX = i; endCellY = j; break;
+                case CELL_KEY:   xk = i; yk = j; break;
+                case CELL_KEY_RED: case CELL_KEY_BLUE: case CELL_KEY_GREEN:
+                    colorKeyPos[v - CELL_KEY_RED][0] = i;
+                    colorKeyPos[v - CELL_KEY_RED][1] = j;
+                    break;
+                case CELL_DOOR_RED: case CELL_DOOR_BLUE: case CELL_DOOR_GREEN:
+                    colorDoorPos[v - CELL_DOOR_RED][0] = i;
+                    colorDoorPos[v - CELL_DOOR_RED][1] = j;
+                    break;
+                case CELL_COIN: case CELL_GEM:
+                    if (bonusCellCount < 32) {
+                        bonusCells[bonusCellCount].x = i;
+                        bonusCells[bonusCellCount].y = j;
+                        bonusCells[bonusCellCount].kind = v;
+                        bonusCellCount++;
+                    }
+                    break;
+            }
+        }
+    }
+}
+
+// ========== Map Generation ==========
 int can_set(int x, int y)
 {
     int i, count = 0;
     for (i = 0; i < 4; i++) {
         int x1 = x + direction[i][0];
         int y1 = y + direction[i][1];
-        if (map[x1][y1] == 0 || map[x1][y1] == -1) count++;
+        if (map[x1][y1] == CELL_ROAD || map[x1][y1] == CELL_BORDER) count++;
     }
     return (count <= 1) ? 1 : 0;
 }
@@ -73,15 +189,15 @@ void CreatMap(void)
 
     for (i = 1; i <= Row; i++)
         for (j = 1; j <= Col; j++)
-            map[i][j] = 3;
+            map[i][j] = CELL_WALL;
 
     for (i = 0; i <= Row + 1; i++) {
-        map[i][0] = -1;
-        map[i][Col + 1] = -1;
+        map[i][0] = CELL_BORDER;
+        map[i][Col + 1] = CELL_BORDER;
     }
     for (j = 0; j <= Col + 1; j++) {
-        map[0][j] = -1;
-        map[Row + 1][j] = -1;
+        map[0][j] = CELL_BORDER;
+        map[Row + 1][j] = CELL_BORDER;
     }
 
     int head = 0, tail = 0;
@@ -96,11 +212,11 @@ void CreatMap(void)
         int y = road[r].y;
 
         if (can_set(x, y)) {
-            map[x][y] = 0;
+            map[x][y] = CELL_ROAD;
             for (i = 0; i < 4; i++) {
                 int x_next = x + direction[i][0];
                 int y_next = y + direction[i][1];
-                if (map[x_next][y_next] == 3) {
+                if (map[x_next][y_next] == CELL_WALL) {
                     tail++;
                     road[tail].x = x_next;
                     road[tail].y = y_next;
@@ -114,12 +230,12 @@ void CreatMap(void)
         head++;
     }
 
-    map[2][2] = 4;
+    map[2][2] = CELL_START;
     int found = 0;
     for (int col = Col - 1; col >= 1 && !found; col--) {
         for (i = Row; i >= 1; i--) {
-            if (map[i][col] == 0) {
-                map[i][col] = 5;
+            if (map[i][col] == CELL_ROAD) {
+                map[i][col] = CELL_EXIT;
                 found = 1;
                 break;
             }
@@ -129,28 +245,11 @@ void CreatMap(void)
     for (i = 1; i <= Row; i++)
         for (j = 1; j <= Col; j++)
             map_change[i][j] = map[i][j];
+
+    MarkMazeDirty();
 }
 
-void CreatWalllist(void)
-{
-    int i, j;
-    if (Wall != NULL) {
-        FreeLinkedList(Wall);
-        Wall = NULL;
-    }
-    Wall = NewLinkedList();
-    for (i = 1; i <= Row; i++) {
-        for (j = 1; j <= Col; j++) {
-            WallT rptr = (WallT)malloc(sizeof(*rptr));
-            rptr->wx = gridOffsetX + (j - 0.5) * cellSize;
-            rptr->wy = gridOffsetY + (i - 0.5) * cellSize;
-            rptr->x0 = i;
-            rptr->y0 = j;
-            InsertNode(Wall, NULL, rptr);
-        }
-    }
-}
-
+// ========== Baked Rendering ==========
 static int noise2d(int x, int y)
 {
     int n = x + y * 57;
@@ -158,10 +257,8 @@ static int noise2d(int x, int y)
     return ((n * (n * n * 15731 + 789221) + 1376312589) & 0x7fffffff) % 1000;
 }
 
-static void DrawWall3D(int gx, int gy)
+static void DrawWallAt(double px, double py, int gx, int gy)
 {
-    double px = gridOffsetX + (gy - 1) * cellSize;
-    double py = gridOffsetY + (gx - 1) * cellSize;
     float cs = (float)cellSize;
     int n = noise2d(gx, gy) % 30;
 
@@ -197,10 +294,8 @@ static void DrawWall3D(int gx, int gy)
     if (n % 11 == 0) DrawPixel((int)(px + (n*17)%(int)cs), (int)(py + (n*19)%(int)cs), (Color){130, 128, 125, 255});
 }
 
-static void DrawFloor(int gx, int gy)
+static void DrawFloorAt(double px, double py, int gx, int gy)
 {
-    double px = gridOffsetX + (gy - 1) * cellSize;
-    double py = gridOffsetY + (gx - 1) * cellSize;
     float cs = (float)cellSize;
     int n = noise2d(gx + 100, gy + 100) % 40;
 
@@ -218,6 +313,45 @@ static void DrawFloor(int gx, int gy)
     }
 }
 
+static void BakeMaze(void)
+{
+    EnsureMazeRT();
+    BeginTextureMode(mazeRT);
+    ClearBackground(BLANK);
+    for (int i = 1; i <= Row; i++) {
+        for (int j = 1; j <= Col; j++) {
+            int v = map_change[i][j];
+            double px = (j - 1) * cellSize;
+            double py = (i - 1) * cellSize;
+            if (v == CELL_WALL || v == CELL_BORDER) DrawWallAt(px, py, i, j);
+            else DrawFloorAt(px, py, i, j);
+        }
+    }
+    EndTextureMode();
+    mazeDirty = 0;
+    CacheMapPoints();
+}
+
+static void BakeFog(void)
+{
+    if (!IsFogDirty()) return;
+    EnsureMazeRT();
+    BeginTextureMode(fogRT);
+    ClearBackground(BLANK);
+    for (int i = 1; i <= Row; i++) {
+        for (int j = 1; j <= Col; j++) {
+            if (!IsExplored(i, j)) {
+                double fx = (j - 1) * cellSize;
+                double fy = (i - 1) * cellSize;
+                DrawRectangle((int)fx, (int)fy, (int)cellSize + 1, (int)cellSize + 1, BLACK);
+            }
+        }
+    }
+    EndTextureMode();
+    ClearFogDirty();
+}
+
+// ========== Animated Feature Drawing ==========
 static void DrawStartPoint(double px, double py, float cs)
 {
     float time = GetTime();
@@ -283,29 +417,50 @@ static void DrawKeyItem(double px, double py, float cs)
     // Key teeth
     DrawLine(cx + (int)(cs*0.1), cy, cx + (int)(cs*0.1), cy + (int)(cs*0.1), GOLD);
     DrawLine(cx + (int)(cs*0.2), cy, cx + (int)(cs*0.2), cy + (int)(cs*0.12), GOLD);
+}
 
-    // Sparkle particles
-    if (rand() % 3 == 0) SpawnKeyGlow((float)cx, (float)cy);
+static const Color keyColors[3] = {{210, 70, 60, 255}, {70, 100, 210, 255}, {70, 170, 80, 255}};
+
+static void DrawColoredKeysAndDoors(float cs)
+{
+    for (int d = 0; d < 3; d++) {
+        if (colorKeyPos[d][0] >= 1 && IsExplored(colorKeyPos[d][0], colorKeyPos[d][1])) {
+            double px = gridOffsetX + (colorKeyPos[d][1] - 0.5) * cellSize;
+            double py = gridOffsetY + (colorKeyPos[d][0] - 0.5) * cellSize;
+            DrawCircle((int)px, (int)py, cs * 0.14f, keyColors[d]);
+            DrawCircleLines((int)px, (int)py, cs * 0.14f, (Color){255, 255, 255, 180});
+        }
+        if (colorDoorPos[d][0] >= 1 && IsExplored(colorDoorPos[d][0], colorDoorPos[d][1])) {
+            double px = gridOffsetX + (colorDoorPos[d][1] - 1) * cellSize;
+            double py = gridOffsetY + (colorDoorPos[d][0] - 1) * cellSize;
+            Color c = keyColors[d];
+            DrawRectangle((int)px, (int)py, (int)cs, (int)cs, (Color){c.r, c.g, c.b, 110});
+            DrawRectangleLines((int)px, (int)py, (int)cs, (int)cs, c);
+        }
+    }
+}
+
+// Bake the maze layer (and refresh feature caches) if dirty. The FP renderer
+// relies on the caches without going through Drawmap, so it calls this too.
+void EnsureMapCaches(void)
+{
+    if (mazeDirty) BakeMaze();
 }
 
 void Drawmap(int a[][100])
 {
-    int i, j;
+    EnsureMapCaches();
     float cs = (float)cellSize;
 
-    // Draw floors first
-    for (i = 1; i <= Row; i++) {
-        for (j = 1; j <= Col; j++) {
-            if (a[i][j] != 3 && a[i][j] != -1) {
-                DrawFloor(i, j);
-            }
-        }
-    }
+    // Static floor/wall layer: one baked texture quad
+    DrawTextureRec(mazeRT.texture,
+                   (Rectangle){0, 0, (float)mazeRT.texture.width, -(float)mazeRT.texture.height},
+                   (Vector2){(float)gridOffsetX, (float)gridOffsetY}, WHITE);
 
-    // Draw solution path glow
-    for (i = 1; i <= Row; i++) {
-        for (j = 1; j <= Col; j++) {
-            if (a[i][j] == 1) {
+    // Solution path glow
+    for (int i = 1; i <= Row; i++) {
+        for (int j = 1; j <= Col; j++) {
+            if (a[i][j] == CELL_PATH) {
                 double px = gridOffsetX + (j - 1) * cellSize;
                 double py = gridOffsetY + (i - 1) * cellSize;
                 DrawRectangle((int)px, (int)py, (int)cs, (int)cs, (Color){0, 200, 220, 80});
@@ -313,28 +468,21 @@ void Drawmap(int a[][100])
         }
     }
 
-    // Draw walls (on top of floors for overlap shadow)
-    for (i = 1; i <= Row; i++) {
-        for (j = 1; j <= Col; j++) {
-            if (a[i][j] == 3 || a[i][j] == -1) {
-                DrawWall3D(i, j);
-            }
-        }
+    // Animated features (cached positions instead of full-map scans)
+    if (startCellX >= 1) {
+        DrawStartPoint(gridOffsetX + (startCellY - 1) * cellSize,
+                       gridOffsetY + (startCellX - 1) * cellSize, cs);
+    }
+    if (endCellX >= 1) {
+        DrawEndPoint(gridOffsetX + (endCellY - 1) * cellSize,
+                     gridOffsetY + (endCellX - 1) * cellSize, cs);
+    }
+    if (!is_key && xk >= 1) {
+        DrawKeyItem(gridOffsetX + (yk - 1) * cellSize,
+                    gridOffsetY + (xk - 1) * cellSize, cs);
     }
 
-    // Draw items on top
-    for (i = 1; i <= Row; i++) {
-        for (j = 1; j <= Col; j++) {
-            double px = gridOffsetX + (j - 1) * cellSize;
-            double py = gridOffsetY + (i - 1) * cellSize;
-            if (a[i][j] == 4) DrawStartPoint(px, py, cs);
-            if (a[i][j] == 5) {
-                DrawEndPoint(px, py, cs);
-                if (rand() % 4 == 0) SpawnMagic((float)(px + cs/2), (float)(py + cs/2));
-            }
-            if (a[i][j] == 2) DrawKeyItem(px, py, cs);
-        }
-    }
+    DrawColoredKeysAndDoors(cs);
 
     // Draw player (animated)
     double ppx = gridOffsetX + (Y - 0.5) * cellSize;
@@ -353,65 +501,37 @@ void DrawLighting(void)
     double px = gridOffsetX + (Y - 0.5) * cellSize;
     double py = gridOffsetY + (X - 0.5) * cellSize;
 
-    // === Fog of war: black out unexplored cells ===
-    for (int i = 1; i <= Row; i++) {
-        for (int j = 1; j <= Col; j++) {
-            if (!IsExplored(i, j)) {
-                double fx = gridOffsetX + (j - 1) * cellSize;
-                double fy = gridOffsetY + (i - 1) * cellSize;
-                DrawRectangle((int)fx, (int)fy, (int)cellSize + 1, (int)cellSize + 1, BLACK);
-            }
-        }
-    }
+    if (glowTex.id == 0) BakeGlowTexture();
+
+    // === Fog of war: one baked texture of black cells over unexplored area ===
+    BakeFog();
+    DrawTextureRec(fogRT.texture,
+                   (Rectangle){0, 0, (float)fogRT.texture.width, -(float)fogRT.texture.height},
+                   (Vector2){(float)gridOffsetX, (float)gridOffsetY}, WHITE);
 
     // Semi-transparent darkness over explored area
     DrawRectangle(0, 0, GetScreenWidth(), GetScreenHeight(), (Color){5, 5, 15, 130});
 
-    // === Additive glow for light sources ===
+    // === Additive glow for light sources (gradient textures instead of concentric circles) ===
     BeginBlendMode(BLEND_ADDITIVE);
 
-    // Player torch - warm flickering glow (smaller)
+    // Player torch - warm flickering glow
     float flicker = 0.92f + 0.08f * sinf(time * 12.0f) + 0.04f * sinf(time * 27.0f);
-    float pr = (float)(cellSize * 2.5) * flicker;
-    for (float r = pr; r > 0; r -= 4.0f) {
-        float alpha = 25.0f * (1.0f - r / pr);
-        if (alpha > 1.0f)
-            DrawCircle((int)px, (int)py, r, (Color){255, 180, 80, (unsigned char)alpha});
-    }
+    BakeGlowRadial(px, py, cellSize * 2.5 * flicker, (Color){255, 180, 80, 25});
     DrawCircle((int)px, (int)py, (float)(cellSize * 0.8), (Color){255, 200, 100, 8});
 
-    // Key light (golden, smaller)
-    if (!is_key) {
-        for (int i = 1; i <= Row; i++) {
-            for (int j = 1; j <= Col; j++) {
-                if (map_change[i][j] == 2) {
-                    double kx = gridOffsetX + (j - 0.5) * cellSize;
-                    double ky = gridOffsetY + (i - 0.5) * cellSize;
-                    float kr = (float)(cellSize * 1.5);
-                    for (float r = kr; r > 0; r -= 4.0f) {
-                        float alpha = 40.0f * (1.0f - r / kr);
-                        if (alpha > 1.0f)
-                            DrawCircle((int)kx, (int)ky, r, (Color){255, 215, 0, (unsigned char)alpha});
-                    }
-                }
-            }
-        }
+    // Key light (golden)
+    if (!is_key && xk >= 1) {
+        double kx = gridOffsetX + (yk - 0.5) * cellSize;
+        double ky = gridOffsetY + (xk - 0.5) * cellSize;
+        BakeGlowRadial(kx, ky, cellSize * 1.5, (Color){255, 215, 0, 40});
     }
 
-    // End point light (purple magic, smaller)
-    for (int i = 1; i <= Row; i++) {
-        for (int j = 1; j <= Col; j++) {
-            if (map_change[i][j] == 5) {
-                double ex = gridOffsetX + (j - 0.5) * cellSize;
-                double ey = gridOffsetY + (i - 0.5) * cellSize;
-                float er = (float)(cellSize * 1.8);
-                for (float r = er; r > 0; r -= 4.0f) {
-                    float alpha = 45.0f * (1.0f - r / er);
-                    if (alpha > 1.0f)
-                        DrawCircle((int)ex, (int)ey, r, (Color){150, 80, 255, (unsigned char)alpha});
-                }
-            }
-        }
+    // End point light (purple magic)
+    if (endCellX >= 1) {
+        double ex = gridOffsetX + (endCellY - 0.5) * cellSize;
+        double ey = gridOffsetY + (endCellX - 0.5) * cellSize;
+        BakeGlowRadial(ex, ey, cellSize * 1.8, (Color){150, 80, 255, 45});
     }
 
     // Torch item boost
@@ -424,31 +544,39 @@ void DrawLighting(void)
 
 void DrawVignette(void)
 {
-    // Corner darkening using gradient rectangles
+    static Texture2D vignetteTex = {0};
+    static int bakedForW = 0, bakedForH = 0;
+
     int w = GetScreenWidth();
     int h = GetScreenHeight();
-    int v = 120;
+    if (vignetteTex.id == 0 || bakedForW != w || bakedForH != h) {
+        if (vignetteTex.id != 0) UnloadTexture(vignetteTex);
+        // Bake at half resolution and upscale - the gradient is smooth anyway
+        int tw = w / 2, th = h / 2;
+        Image img = GenImageColor(tw, th, BLANK);
+        Color *pxs = (Color*)img.data;
+        int v = 60; // 120 screen px at half res
+        for (int y = 0; y < th; y++) {
+            int dv = (y < v) ? y : (y >= th - v ? th - 1 - y : v);
+            float av = 100.0f / 255.0f * (1.0f - (float)dv / v);
+            for (int x = 0; x < tw; x++) {
+                int dh = (x < v) ? x : (x >= tw - v ? tw - 1 - x : v);
+                float ah = 80.0f / 255.0f * (1.0f - (float)dh / v);
+                // Corners got both overlays in the original: combine the alphas
+                float a = 1.0f - (1.0f - av) * (1.0f - ah);
+                pxs[y*tw + x] = (Color){0, 0, 0, (unsigned char)(a * 255.0f)};
+            }
+        }
+        vignetteTex = LoadTextureFromImage(img);
+        UnloadImage(img);
+        bakedForW = w;
+        bakedForH = h;
+    }
 
-    // Top
-    for (int i = 0; i < v; i++) {
-        float a = 100.0f * (1.0f - (float)i / v);
-        DrawLine(0, i, w, i, (Color){0, 0, 0, (unsigned char)a});
-    }
-    // Bottom
-    for (int i = 0; i < v; i++) {
-        float a = 100.0f * (1.0f - (float)i / v);
-        DrawLine(0, h - 1 - i, w, h - 1 - i, (Color){0, 0, 0, (unsigned char)a});
-    }
-    // Left
-    for (int i = 0; i < v; i++) {
-        float a = 80.0f * (1.0f - (float)i / v);
-        DrawLine(i, 0, i, h, (Color){0, 0, 0, (unsigned char)a});
-    }
-    // Right
-    for (int i = 0; i < v; i++) {
-        float a = 80.0f * (1.0f - (float)i / v);
-        DrawLine(w - 1 - i, 0, w - 1 - i, h, (Color){0, 0, 0, (unsigned char)a});
-    }
+    DrawTexturePro(vignetteTex,
+                   (Rectangle){0, 0, (float)vignetteTex.width, (float)vignetteTex.height},
+                   (Rectangle){0, 0, (float)w, (float)h},
+                   (Vector2){0, 0}, 0, WHITE);
 }
 
 void AddWalkBob(void)
@@ -464,28 +592,59 @@ void UpdateWalkBob(void)
     }
 }
 
-double distWall(double x, double y, WallT rect)
+// ========== Per-frame entity updates (kept out of the draw functions) ==========
+void UpdateCollectibles(float dt)
 {
-    return fabs(x - rect->wx) + fabs(y - rect->wy);
+    for (int i = 0; i < coinCount; i++) {
+        if (coins[i].active) coins[i].animTime += dt;
+    }
 }
 
-WallT SelectNearestNode(linkedlistADT Wall, double mx, double my)
+void SpawnAmbientParticles(void)
 {
-    linkedlistADT nearestnode = NULL, ptr;
-    double mindistance, dist;
-    ptr = NextNode(Wall, Wall);
-    if (ptr == NULL) return NULL;
-    nearestnode = ptr;
-    mindistance = distWall(mx, my, (WallT)NodeObj(Wall, ptr));
-    while (NextNode(Wall, ptr) != NULL) {
-        ptr = NextNode(Wall, ptr);
-        dist = distWall(mx, my, (WallT)NodeObj(Wall, ptr));
-        if (dist < mindistance) {
-            nearestnode = ptr;
-            mindistance = dist;
+    // Key sparkle
+    if (!is_key && xk >= 1 && rand() % 3 == 0) {
+        SpawnKeyGlow((float)(gridOffsetX + (yk - 0.5) * cellSize),
+                     (float)(gridOffsetY + (xk - 0.5) * cellSize));
+    }
+    // Exit magic
+    if (endCellX >= 1 && rand() % 4 == 0) {
+        SpawnMagic((float)(gridOffsetX + (endCellY - 0.5) * cellSize),
+                   (float)(gridOffsetY + (endCellX - 0.5) * cellSize));
+    }
+}
+
+// ========== Cell-entry logic ==========
+
+void Judgekey(void)
+{
+    if (map_change[X][Y] == CELL_KEY) {
+        map_change[X][Y] = CELL_ROAD;
+        is_key = 1;
+    }
+}
+
+void Randomkey(void)
+{
+    int roads[1000][2];
+    int roadCount = 0;
+    for (int i = 1; i <= Row; i++) {
+        for (int j = 1; j <= Col; j++) {
+            if (map_change[i][j] == CELL_ROAD && !(i == 2 && j == 2)) {
+                roads[roadCount][0] = i;
+                roads[roadCount][1] = j;
+                roadCount++;
+            }
         }
     }
-    return (WallT)NodeObj(Wall, nearestnode);
+    if (roadCount > 0) {
+        int idx = rand() % roadCount;
+        xk = roads[idx][0];
+        yk = roads[idx][1];
+        map_change[xk][yk] = CELL_KEY;
+    }
+    is_key = 0;
+    step = 0;
 }
 
 // Shared cell-entry logic used by both top-down grid movement (event.c)
@@ -498,50 +657,18 @@ void OnEnterCell(void)
     CheckTraps();
     CheckPortals();
 
-    // Multi-key pickup (map values 6,7,8 = red,blue,green keys)
-    if (map_change[X][Y] >= 6 && map_change[X][Y] <= 8) {
-        int keyIdx = map_change[X][Y] - 6;
+    // Multi-key pickup (colored keys)
+    if (map_change[X][Y] >= CELL_KEY_RED && map_change[X][Y] <= CELL_KEY_GREEN) {
+        int keyIdx = map_change[X][Y] - CELL_KEY_RED;
         keysCollected[keyIdx] = 1;
-        map_change[X][Y] = 0;
+        map_change[X][Y] = CELL_ROAD;
         PlayKeySound();
         AddScore(50);
+        MarkMazeDirty(); // refresh the colored-key/door position caches
         if (keysCollected[0] && keysCollected[1] && keysCollected[2])
             UnlockAchievement(6); // Key Master
     }
 }
-
-void Judgekey(void)
-{
-    if (map_change[X][Y] == 2) {
-        map_change[X][Y] = 0;
-        is_key = 1;
-    }
-}
-
-void Randomkey(void)
-{
-    int roads[1000][2];
-    int roadCount = 0;
-    for (int i = 1; i <= Row; i++) {
-        for (int j = 1; j <= Col; j++) {
-            if (map_change[i][j] == 0 && !(i == 2 && j == 2)) {
-                roads[roadCount][0] = i;
-                roads[roadCount][1] = j;
-                roadCount++;
-            }
-        }
-    }
-    if (roadCount > 0) {
-        int idx = rand() % roadCount;
-        xk = roads[idx][0];
-        yk = roads[idx][1];
-        map_change[xk][yk] = 2;
-    }
-    is_key = 0;
-    step = 0;
-    is_start = 0;
-}
-
 
 // ========== New Map Entity Functions ==========
 
@@ -565,7 +692,7 @@ void SpawnCollectibles(int count)
         attempts++;
         int cx = rand() % Row + 1;
         int cy = rand() % Col + 1;
-        if (map_change[cx][cy] == 0 && !(cx == 2 && cy == 2)) {
+        if (map_change[cx][cy] == CELL_ROAD && !(cx == 2 && cy == 2)) {
             coins[coinCount].x = cx;
             coins[coinCount].y = cy;
             coins[coinCount].value = (rand() % 5 == 0) ? 50 : 10;
@@ -584,7 +711,7 @@ void SpawnTraps(int count)
         attempts++;
         int tx = rand() % (Row - 4) + 3;
         int ty = rand() % (Col - 4) + 3;
-        if (map_change[tx][ty] == 0 && (abs(tx - 2) + abs(ty - 2)) > 4) {
+        if (map_change[tx][ty] == CELL_ROAD && (abs(tx - 2) + abs(ty - 2)) > 4) {
             traps[trapCount].x = tx;
             traps[trapCount].y = ty;
             traps[trapCount].type = 0;
@@ -606,7 +733,7 @@ void SpawnPortals(int count)
             y1 = rand() % (Col / 2) + 2;
             x2 = rand() % (Row - 4) + 2;
             y2 = rand() % (Col / 2) + Col / 2;
-            if (map_change[x1][y1] == 0 && map_change[x2][y2] == 0 &&
+            if (map_change[x1][y1] == CELL_ROAD && map_change[x2][y2] == CELL_ROAD &&
                 (abs(x1-x2)+abs(y1-y2)) > 8) ok = 1;
         }
         if (ok) {
@@ -632,9 +759,9 @@ void SpawnBoxes(int count)
         // Never block the golden key or its only entrance: skip its 4 neighbors
         int nearKey = 0;
         for (int d = 0; d < 4; d++) {
-            if (map_change[bx + direction[d][0]][by + direction[d][1]] == 2) nearKey = 1;
+            if (map_change[bx + direction[d][0]][by + direction[d][1]] == CELL_KEY) nearKey = 1;
         }
-        if (map_change[bx][by] == 0 && !nearKey && (abs(bx-2)+abs(by-2)) > 5) {
+        if (map_change[bx][by] == CELL_ROAD && !nearKey && (abs(bx-2)+abs(by-2)) > 5) {
             boxes[boxCount].x = bx;
             boxes[boxCount].y = by;
             boxes[boxCount].active = 1;
@@ -651,7 +778,7 @@ void SpawnPlates(int count)
         attempts++;
         int px = rand() % (Row - 4) + 3;
         int py = rand() % (Col - 4) + 3;
-        if (map_change[px][py] == 0) {
+        if (map_change[px][py] == CELL_ROAD) {
             plates[plateCount].x = px;
             plates[plateCount].y = py;
             plates[plateCount].active = 1;
@@ -679,7 +806,7 @@ void CreateHiddenRoom(void)
     for (int i = -1; i <= 1; i++)
         for (int j = -1; j <= 1; j++)
             if (hx+i >= 1 && hx+i <= Row && hy+j >= 1 && hy+j <= Col)
-                map_change[hx+i][hy+j] = 0;
+                map_change[hx+i][hy+j] = CELL_ROAD;
 
     // Put gems and items in room
     coins[coinCount].x = hx; coins[coinCount].y = hy;
@@ -687,6 +814,7 @@ void CreateHiddenRoom(void)
     coins[coinCount].animTime = 0; coinCount++;
 
     SpawnItem(hx, hy + (hy < Col/2 ? 1 : -1), ITEM_BOMB);
+    MarkMazeDirty();
 }
 
 void UpdateTraps(void)
@@ -769,14 +897,14 @@ void CheckCollectibles(void)
 int CanMoveTo(int x, int y)
 {
     if (x < 1 || x > Row || y < 1 || y > Col) return 0;
-    if (map_change[x][y] == 3) return 0;
+    if (map_change[x][y] == CELL_WALL) return 0;
     // Check boxes
     for (int i = 0; i < boxCount; i++) {
         if (boxes[i].active && boxes[i].x == x && boxes[i].y == y) return 2; // box
     }
-    // Check doors (10=red,11=blue,12=green)
-    if (map_change[x][y] >= 10 && map_change[x][y] <= 12) {
-        int doorIdx = map_change[x][y] - 10;
+    // Check doors
+    if (map_change[x][y] >= CELL_DOOR_RED && map_change[x][y] <= CELL_DOOR_GREEN) {
+        int doorIdx = map_change[x][y] - CELL_DOOR_RED;
         if (keysCollected[doorIdx]) return 1; // can open
         return 0;
     }
@@ -787,7 +915,7 @@ int TryPushBox(int bx, int by, int dx, int dy)
 {
     int nx = bx + dx, ny = by + dy;
     if (nx < 1 || nx > Row || ny < 1 || ny > Col) return 0;
-    if (map_change[nx][ny] == 3) return 0;
+    if (map_change[nx][ny] == CELL_WALL) return 0;
     // Check another box
     for (int i = 0; i < boxCount; i++) {
         if (boxes[i].active && boxes[i].x == nx && boxes[i].y == ny) return 0;
@@ -804,9 +932,10 @@ int TryPushBox(int bx, int by, int dx, int dy)
                     // Open a random door
                     for (int d = 0; d < 3; d++) {
                         if (doorExists[d]) {
-                            map_change[doorPositions[d][0]][doorPositions[d][1]] = 0;
+                            map_change[doorPositions[d][0]][doorPositions[d][1]] = CELL_ROAD;
                             doorExists[d] = 0;
                             PlayDoorSound();
+                            MarkMazeDirty();
                             break;
                         }
                     }
@@ -825,8 +954,8 @@ void ExplodeBomb(int cx, int cy)
         for (int dy = -1; dy <= 1; dy++) {
             int x = cx + dx, y = cy + dy;
             if (x >= 1 && x <= Row && y >= 1 && y <= Col) {
-                if (map_change[x][y] == 3) {
-                    map_change[x][y] = 0;
+                if (map_change[x][y] == CELL_WALL) {
+                    map_change[x][y] = CELL_ROAD;
                     // Check hidden room
                     if (x == hiddenRoomX && y == hiddenRoomY && !hiddenRoomFound) {
                         hiddenRoomFound = 1;
@@ -850,6 +979,5 @@ void ExplodeBomb(int cx, int cy)
         SpawnParticle((float)(gridOffsetX + cy*cellSize), (float)(gridOffsetY + cx*cellSize),
                       cosf(angle)*speed, sinf(angle)*speed, 0.5f, 3, (Color){255, 150, 50, 200});
     }
-    CreatWalllist();
-    OptimalSolution();
+    MarkMazeDirty();
 }

@@ -31,8 +31,6 @@ void SpawnEnemy(int x, int y, int type)
     e->isHurt = 0;
     e->hurtTime = 0;
     e->attackCooldown = 0;
-    e->knockbackX = 0;
-    e->knockbackY = 0;
     switch (type) {
         case ENEMY_SLIME:    e->hp = 20; e->maxHp = 20; e->attack = 5; break;
         case ENEMY_SKELETON: e->hp = 35; e->maxHp = 35; e->attack = 10; break;
@@ -44,9 +42,9 @@ void SpawnEnemy(int x, int y, int type)
 static int EnemyCanMove(int x, int y, int type)
 {
     if (x < 1 || x > Row || y < 1 || y > Col) return 0;
-    if (map_change[x][y] >= 10 && map_change[x][y] <= 12) return 0; // doors block all
+    if (map_change[x][y] >= CELL_DOOR_RED && map_change[x][y] <= CELL_DOOR_GREEN) return 0; // doors block all
     if (type == ENEMY_GHOST) return 1; // ghost passes ordinary walls only
-    if (map_change[x][y] == 3) return 0;
+    if (map_change[x][y] == CELL_WALL) return 0;
     return 1;
 }
 
@@ -100,16 +98,6 @@ void UpdateEnemies(void)
             e->y += dy;
         }
     }
-}
-
-int CheckEnemyCollision(int px, int py)
-{
-    for (int i = 0; i < enemyCount; i++) {
-        if (enemies[i].active && enemies[i].x == px && enemies[i].y == py) {
-            return i + 1;
-        }
-    }
-    return 0;
 }
 
 static void DrawSlime(int px, int py, float cs, float t)

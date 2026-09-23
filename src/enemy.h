@@ -24,7 +24,6 @@ typedef struct {
     int isHurt;
     float hurtTime;
     float attackCooldown;
-    float knockbackX, knockbackY;
 } Enemy;
 
 extern Enemy enemies[MAX_ENEMIES];
@@ -34,7 +33,6 @@ void InitEnemies(void);
 void SpawnEnemy(int x, int y, int type);
 void UpdateEnemies(void);
 void DrawEnemies(void);
-int CheckEnemyCollision(int px, int py);
 
 // Combat
 void DamageEnemy(int idx, int dmg);

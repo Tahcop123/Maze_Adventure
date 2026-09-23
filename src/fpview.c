@@ -160,7 +160,7 @@ static int IsWallCell(int mx, int my)
 {
     if (mx<0||mx>=100||my<0||my>=100) return 1;
     int v = map_change[my][mx];
-    return (v==3||v==-1||(v>=10&&v<=12));
+    return (v==CELL_WALL||v==CELL_BORDER||(v>=CELL_DOOR_RED&&v<=CELL_DOOR_GREEN));
 }
 
 static int CircleCollides(float cx, float cy, float r)
@@ -211,7 +211,6 @@ void UpdateFPView(float dt)
         int gx=(int)fpPosY, gy=(int)fpPosX;
         if (gx!=X||gy!=Y) {
             X=gx; Y=gy; step++; UpdateFog();
-            if (step==1) { is_start=1; start=(int)clock(); }
             if (speedBoostTime<=0 && rogueFreeSteps<=0) {
                 Hp--;
                 if (Hp<=0) { gameOverReason=0; gameState=STATE_GAMEOVER; PlayLoseSound(); }
@@ -230,15 +229,19 @@ void UpdateFPView(float dt)
 static int IsInViewCone(float cellX, float cellZ, float fovDeg)
 {
     float dx=cellX-fpPosX, dz=cellZ-fpPosY;
-    float dist=sqrtf(dx*dx+dz*dz);
-    if (dist>RENDER_DIST) return 0;
-    if (dist<2.0f) return 1;
+    float dist2=dx*dx+dz*dz;
+    if (dist2>(float)RENDER_DIST*RENDER_DIST) return 0;
+    if (dist2<4.0f) return 1;
+    float dist=sqrtf(dist2);
     float dot=(dx*fpDirX+dz*fpDirY)/dist;
     return dot > cosf(fovDeg*DEG2RAD*0.6f);
 }
 
 void DrawFPView(void)
 {
+    // The FP renderer reads cached key/exit/bonus positions which are filled
+    // during the maze bake - make sure that has happened at least once.
+    EnsureMapCaches();
     int w=GetScreenWidth(), h=GetScreenHeight();
     static float bobTime=0;
     bool moving = IsKeyDown(KEY_W)||IsKeyDown(KEY_S)||IsKeyDown(KEY_A)||IsKeyDown(KEY_D)||
@@ -263,33 +266,28 @@ void DrawFPView(void)
     for (int i=1;i<=Row;i++)
         for (int j=1;j<=Col;j++) {
             int v=map_change[i][j];
-            if (v!=3&&v!=-1&&!(v>=10&&v<=12)) continue;
+            if (v!=CELL_WALL&&v!=CELL_BORDER&&!(v>=CELL_DOOR_RED&&v<=CELL_DOOR_GREEN)) continue;
             if (!IsInViewCone((float)j+0.5f,(float)i+0.5f,75.0f)) continue;
             Vector3 pos={(float)j+0.5f,0.5f,(float)i+0.5f};
-            if (v==3||v==-1) {
+            if (v==CELL_WALL||v==CELL_BORDER) {
                 DrawMesh(cubeMesh, brickMat, MatrixTranslate(pos.x,pos.y,pos.z));
-            } else if (v==10) DrawCube(pos,1,1,1,(Color){180,80,70,255});
-            else if (v==11) DrawCube(pos,1,1,1,(Color){70,100,180,255});
+            } else if (v==CELL_DOOR_RED) DrawCube(pos,1,1,1,(Color){180,80,70,255});
+            else if (v==CELL_DOOR_BLUE) DrawCube(pos,1,1,1,(Color){70,100,180,255});
             else DrawCube(pos,1,1,1,(Color){70,150,80,255});
         }
 
-    // Key
-    if (!is_key)
-        for (int i=1;i<=Row;i++)
-            for (int j=1;j<=Col;j++)
-                if (map_change[i][j]==2) {
-                    float b=sinf(GetTime()*3.0f)*0.1f;
-                    DrawCube((Vector3){j+0.5f,0.4f+b,i+0.5f},0.3f,0.3f,0.3f,GOLD);
-                    DrawCubeWires((Vector3){j+0.5f,0.4f+b,i+0.5f},0.35f,0.35f,0.35f,YELLOW);
-                }
+    // Key (cached position instead of a full-map scan)
+    if (!is_key && xk >= 1) {
+        float b=sinf(GetTime()*3.0f)*0.1f;
+        DrawCube((Vector3){yk+0.5f,0.4f+b,xk+0.5f},0.3f,0.3f,0.3f,GOLD);
+        DrawCubeWires((Vector3){yk+0.5f,0.4f+b,xk+0.5f},0.35f,0.35f,0.35f,YELLOW);
+    }
 
-    // End flag
-    for (int i=1;i<=Row;i++)
-        for (int j=1;j<=Col;j++)
-            if (map_change[i][j]==5) {
-                DrawCube((Vector3){j+0.5f,0.5f,i+0.5f},0.2f,1.0f,0.2f,(Color){180,40,40,255});
-                DrawCube((Vector3){j+0.5f,0.85f,i+0.5f},0.5f,0.3f,0.05f,(Color){220,50,50,255});
-            }
+    // End flag (cached position)
+    if (endCellX >= 1) {
+        DrawCube((Vector3){endCellY+0.5f,0.5f,endCellX+0.5f},0.2f,1.0f,0.2f,(Color){180,40,40,255});
+        DrawCube((Vector3){endCellY+0.5f,0.85f,endCellX+0.5f},0.5f,0.3f,0.05f,(Color){220,50,50,255});
+    }
 
     // Enemies
     for (int i=0;i<enemyCount;i++) {
@@ -306,17 +304,16 @@ void DrawFPView(void)
         if (enemies[i].isHurt) DrawSphereWires((Vector3){ex,0.4f,ez},0.4f,8,8,(Color){255,80,80,200});
     }
 
-    // Collectibles
-    for (int i=1;i<=Row;i++)
-        for (int j=1;j<=Col;j++) {
-            if (map_change[i][j]==20) {
-                float b=sinf(GetTime()*3+i+j)*0.08f;
-                DrawSphere((Vector3){j+0.5f,0.2f+b,i+0.5f},0.12f,GOLD);
-            } else if (map_change[i][j]==21) {
-                float b=sinf(GetTime()*2.5f+i+j)*0.1f;
-                DrawCube((Vector3){j+0.5f,0.25f+b,i+0.5f},0.15f,0.2f,0.15f,(Color){100,200,255,255});
-            }
+    // Legacy map-file collectibles (cached positions)
+    for (int i=0;i<bonusCellCount;i++) {
+        if (bonusCells[i].kind==CELL_COIN) {
+            float b=sinf(GetTime()*3+bonusCells[i].x+bonusCells[i].y)*0.08f;
+            DrawSphere((Vector3){bonusCells[i].y+0.5f,0.2f+b,bonusCells[i].x+0.5f},0.12f,GOLD);
+        } else {
+            float b=sinf(GetTime()*2.5f+bonusCells[i].x+bonusCells[i].y)*0.1f;
+            DrawCube((Vector3){bonusCells[i].y+0.5f,0.25f+b,bonusCells[i].x+0.5f},0.15f,0.2f,0.15f,(Color){100,200,255,255});
         }
+    }
 
     EndMode3D();
     EndTextureMode();

@@ -138,10 +138,11 @@ void CheckAchievements(void)
     if (score >= 1000) UnlockAchievement(11);
 }
 
-void SaveGame(void)
+// Returns 1 on success so the UI can give feedback (disk full, no permission...)
+int SaveGame(void)
 {
     FILE *f = fopen(SAVE_FILE, "wb");
-    if (!f) return;
+    if (!f) return 0;
 
     int ok = 1;
     char magic[4] = {'M','A','Z','S'};
@@ -205,8 +206,22 @@ void SaveGame(void)
     ok = ok && wr(f, &hiddenRoomFound, sizeof(int));
 
     fclose(f);
-    (void)ok;
+    return ok;
 }
+
+// Staging buffers: the file is fully read and validated before ANY game state
+// is committed, so a corrupt/truncated/hostile save cannot leave the game in a
+// half-loaded state or push entity loops out of bounds.
+static int stageMap[100][100];
+static int stageFog[100][100];
+static int stageIce[100][100];
+static Coin stageCoins[MAX_COINS];
+static Trap stageTraps[MAX_TRAPS];
+static Portal stagePortals[MAX_PORTALS];
+static Box stageBoxes[MAX_BOXES];
+static Plate stagePlates[MAX_PLATES];
+static Enemy stageEnemies[MAX_ENEMIES];
+static Item stageItems[MAX_ITEMS];
 
 int LoadGame(void)
 {
@@ -223,66 +238,148 @@ int LoadGame(void)
         return 0;
     }
 
-    int svRow = Row, svCol = Col, svLevel = currentLevel;
+    // --- Staged scalars (read in SaveGame's exact field order) ---
+    int svRow, svCol, svX, svY, svHp, svStep, svScore, svLevel, svChar, svIsKey;
+    int svCoins, svGems, svTotalCoins, svTotalGems, svKills, svTimed;
+    float svTimeRemaining, svStamina, svSpeedBoost, svTorchBoost;
+    int svShield, svRogue, svInventory[4], svKeys[3], svDoorPos[3][2], svDoorExists[3];
+    int svPlayerDir, svViewRadius;
+    unsigned int svSeed;
+
     ok = ok && rd(f, &svRow, sizeof(int));
     ok = ok && rd(f, &svCol, sizeof(int));
-    if (svRow < 5 || svRow > 98 || svCol < 5 || svCol > 98) ok = 0;
-    Row = svRow; Col = svCol;
-
-    ok = ok && rd(f, &X, sizeof(int));
-    ok = ok && rd(f, &Y, sizeof(int));
-    ok = ok && rd(f, &Hp, sizeof(int));
-    ok = ok && rd(f, &step, sizeof(int));
-    ok = ok && rd(f, &score, sizeof(int));
+    ok = ok && rd(f, &svX, sizeof(int));
+    ok = ok && rd(f, &svY, sizeof(int));
+    ok = ok && rd(f, &svHp, sizeof(int));
+    ok = ok && rd(f, &svStep, sizeof(int));
+    ok = ok && rd(f, &svScore, sizeof(int));
     ok = ok && rd(f, &svLevel, sizeof(int));
-    ok = ok && rd(f, &selectedCharacter, sizeof(int));
-    ok = ok && rd(f, &is_key, sizeof(int));
-    ok = ok && rd(f, &coinsCollected, sizeof(int));
-    ok = ok && rd(f, &gemsCollected, sizeof(int));
-    ok = ok && rd(f, &totalCoins, sizeof(int));
-    ok = ok && rd(f, &totalGems, sizeof(int));
-    ok = ok && rd(f, &kills, sizeof(int));
-    ok = ok && rd(f, &timedMode, sizeof(int));
-    ok = ok && rd(f, &timeRemaining, sizeof(float));
-    ok = ok && rd(f, &stamina, sizeof(float));
-    ok = ok && rd(f, &shieldActive, sizeof(int));
-    ok = ok && rd(f, &speedBoostTime, sizeof(float));
-    ok = ok && rd(f, &torchBoostTime, sizeof(float));
-    ok = ok && rd(f, &rogueFreeSteps, sizeof(int));
-    ok = ok && rd(f, inventory, sizeof(int) * 4);
-    ok = ok && rd(f, keysCollected, sizeof(int) * 3);
-    ok = ok && rd(f, doorPositions, sizeof(doorPositions));
-    ok = ok && rd(f, doorExists, sizeof(doorExists));
-    ok = ok && rd(f, &playerDir, sizeof(int));
-    ok = ok && rd(f, &viewRadius, sizeof(int));
-    ok = ok && rd(f, &mapSeed, sizeof(unsigned int));
+    ok = ok && rd(f, &svChar, sizeof(int));
+    ok = ok && rd(f, &svIsKey, sizeof(int));
+    ok = ok && rd(f, &svCoins, sizeof(int));
+    ok = ok && rd(f, &svGems, sizeof(int));
+    ok = ok && rd(f, &svTotalCoins, sizeof(int));
+    ok = ok && rd(f, &svTotalGems, sizeof(int));
+    ok = ok && rd(f, &svKills, sizeof(int));
+    ok = ok && rd(f, &svTimed, sizeof(int));
+    ok = ok && rd(f, &svTimeRemaining, sizeof(float));
+    ok = ok && rd(f, &svStamina, sizeof(float));
+    ok = ok && rd(f, &svShield, sizeof(int));
+    ok = ok && rd(f, &svSpeedBoost, sizeof(float));
+    ok = ok && rd(f, &svTorchBoost, sizeof(float));
+    ok = ok && rd(f, &svRogue, sizeof(int));
+    ok = ok && rd(f, svInventory, sizeof(int) * 4);
+    ok = ok && rd(f, svKeys, sizeof(int) * 3);
+    ok = ok && rd(f, svDoorPos, sizeof(svDoorPos));
+    ok = ok && rd(f, svDoorExists, sizeof(svDoorExists));
+    ok = ok && rd(f, &svPlayerDir, sizeof(int));
+    ok = ok && rd(f, &svViewRadius, sizeof(int));
+    ok = ok && rd(f, &svSeed, sizeof(unsigned int));
 
-    ok = ok && rd(f, map_change, sizeof(int) * 100 * 100);
-    ok = ok && rd(f, fog, sizeof(int) * 100 * 100);
-    ok = ok && rd(f, iceMap, sizeof(int) * 100 * 100);
+    // --- Staged grids ---
+    ok = ok && rd(f, stageMap, sizeof(stageMap));
+    ok = ok && rd(f, stageFog, sizeof(stageFog));
+    ok = ok && rd(f, stageIce, sizeof(stageIce));
 
-    ok = ok && rd(f, &coinCount, sizeof(int));
-    ok = ok && rd(f, coins, sizeof(coins));
-    ok = ok && rd(f, &trapCount, sizeof(int));
-    ok = ok && rd(f, traps, sizeof(traps));
-    ok = ok && rd(f, &portalCount, sizeof(int));
-    ok = ok && rd(f, portals, sizeof(portals));
-    ok = ok && rd(f, &boxCount, sizeof(int));
-    ok = ok && rd(f, boxes, sizeof(boxes));
-    ok = ok && rd(f, &plateCount, sizeof(int));
-    ok = ok && rd(f, plates, sizeof(plates));
-    ok = ok && rd(f, &enemyCount, sizeof(int));
-    ok = ok && rd(f, enemies, sizeof(enemies));
-    ok = ok && rd(f, &itemCount, sizeof(int));
-    ok = ok && rd(f, items, sizeof(items));
-    ok = ok && rd(f, &hiddenRoomX, sizeof(int));
-    ok = ok && rd(f, &hiddenRoomY, sizeof(int));
-    ok = ok && rd(f, &hiddenRoomFound, sizeof(int));
+    // --- Staged entities (counts read first, validated below) ---
+    int svCoinCount, svTrapCount, svPortalCount, svBoxCount, svPlateCount;
+    int svEnemyCount, svItemCount, svHiddenX, svHiddenY, svHiddenFound;
+    ok = ok && rd(f, &svCoinCount, sizeof(int));
+    ok = ok && rd(f, stageCoins, sizeof(stageCoins));
+    ok = ok && rd(f, &svTrapCount, sizeof(int));
+    ok = ok && rd(f, stageTraps, sizeof(stageTraps));
+    ok = ok && rd(f, &svPortalCount, sizeof(int));
+    ok = ok && rd(f, stagePortals, sizeof(stagePortals));
+    ok = ok && rd(f, &svBoxCount, sizeof(int));
+    ok = ok && rd(f, stageBoxes, sizeof(stageBoxes));
+    ok = ok && rd(f, &svPlateCount, sizeof(int));
+    ok = ok && rd(f, stagePlates, sizeof(stagePlates));
+    ok = ok && rd(f, &svEnemyCount, sizeof(int));
+    ok = ok && rd(f, stageEnemies, sizeof(stageEnemies));
+    ok = ok && rd(f, &svItemCount, sizeof(int));
+    ok = ok && rd(f, stageItems, sizeof(stageItems));
+    ok = ok && rd(f, &svHiddenX, sizeof(int));
+    ok = ok && rd(f, &svHiddenY, sizeof(int));
+    ok = ok && rd(f, &svHiddenFound, sizeof(int));
 
     fclose(f);
     if (!ok) return 0;
+
+    // --- Validation: reject anything that could crash the game later ---
+    if (svRow < 5 || svRow > 98 || svCol < 5 || svCol > 98) return 0;
     if (svLevel < 0 || svLevel > 2) return 0;
+    if (svChar < CHAR_KNIGHT || svChar > CHAR_ROGUE) return 0;
+    if (svX < 1 || svX > svRow || svY < 1 || svY > svCol) return 0;
+    if (svCoinCount < 0 || svCoinCount > MAX_COINS) return 0;
+    if (svTrapCount < 0 || svTrapCount > MAX_TRAPS) return 0;
+    if (svPortalCount < 0 || svPortalCount > MAX_PORTALS) return 0;
+    if (svBoxCount < 0 || svBoxCount > MAX_BOXES) return 0;
+    if (svPlateCount < 0 || svPlateCount > MAX_PLATES) return 0;
+    if (svEnemyCount < 0 || svEnemyCount > MAX_ENEMIES) return 0;
+    if (svItemCount < 0 || svItemCount > MAX_ITEMS) return 0;
+    for (int d = 0; d < 3; d++) {
+        if (svDoorExists[d] &&
+            (svDoorPos[d][0] < 1 || svDoorPos[d][0] > svRow ||
+             svDoorPos[d][1] < 1 || svDoorPos[d][1] > svCol)) return 0;
+    }
+
+    // --- Commit ---
+    Row = svRow;
+    Col = svCol;
+    X = svX;
+    Y = svY;
+    Hp = (svHp < 1) ? 1 : svHp;
+    step = svStep;
+    score = svScore;
     currentLevel = svLevel;
+    selectedCharacter = svChar;
+    is_key = svIsKey ? 1 : 0;
+    coinsCollected = svCoins;
+    gemsCollected = svGems;
+    totalCoins = svTotalCoins;
+    totalGems = svTotalGems;
+    kills = svKills;
+    timedMode = svTimed ? 1 : 0;
+    timeRemaining = (svTimeRemaining < 0) ? 0 : svTimeRemaining;
+    stamina = svStamina;
+    if (stamina < 0) stamina = 0;
+    if (stamina > maxStamina) stamina = maxStamina;
+    shieldActive = svShield ? 1 : 0;
+    speedBoostTime = (svSpeedBoost < 0) ? 0 : svSpeedBoost;
+    torchBoostTime = (svTorchBoost < 0) ? 0 : svTorchBoost;
+    rogueFreeSteps = (svRogue < 0) ? 0 : svRogue;
+    for (int i = 0; i < 4; i++) inventory[i] = (svInventory[i] > 0) ? svInventory[i] : 0;
+    for (int i = 0; i < 3; i++) keysCollected[i] = svKeys[i] ? 1 : 0;
+    for (int i = 0; i < 3; i++) {
+        doorPositions[i][0] = svDoorPos[i][0];
+        doorPositions[i][1] = svDoorPos[i][1];
+        doorExists[i] = svDoorExists[i] ? 1 : 0;
+    }
+    playerDir = (svPlayerDir >= 0 && svPlayerDir <= 3) ? svPlayerDir : 0;
+    viewRadius = (svViewRadius >= 1 && svViewRadius <= 10) ? svViewRadius : 4;
+    mapSeed = svSeed;
+
+    memcpy(map_change, stageMap, sizeof(stageMap));
+    memcpy(fog, stageFog, sizeof(stageFog));
+    memcpy(iceMap, stageIce, sizeof(stageIce));
+
+    coinCount = svCoinCount;
+    memcpy(coins, stageCoins, sizeof(stageCoins));
+    trapCount = svTrapCount;
+    memcpy(traps, stageTraps, sizeof(stageTraps));
+    portalCount = svPortalCount;
+    memcpy(portals, stagePortals, sizeof(stagePortals));
+    boxCount = svBoxCount;
+    memcpy(boxes, stageBoxes, sizeof(stageBoxes));
+    plateCount = svPlateCount;
+    memcpy(plates, stagePlates, sizeof(stagePlates));
+    enemyCount = svEnemyCount;
+    memcpy(enemies, stageEnemies, sizeof(stageEnemies));
+    itemCount = svItemCount;
+    memcpy(items, stageItems, sizeof(stageItems));
+    hiddenRoomX = svHiddenX;
+    hiddenRoomY = svHiddenY;
+    hiddenRoomFound = svHiddenFound ? 1 : 0;
 
     // Rebuild derived rendering/pathfinding state
     cellSize = (double)fmin((screenWidth - 220.0) / Col, (screenHeight - 120.0) / Row);
@@ -291,7 +388,8 @@ int LoadGame(void)
     for (int i = 0; i <= Row + 1; i++)
         for (int j = 0; j <= Col + 1; j++)
             map[i][j] = map_change[i][j];
-    CreatWalllist();
+    MarkMazeDirty();
+    MarkFogDirty();
     OptimalSolution();
 
     // Loading always returns to top-down view with a usable mouse

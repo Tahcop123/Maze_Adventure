@@ -7,5 +7,8 @@ int IsExplored(int x, int y);
 int IsVisible(int x, int y);
 void DrawMinimap(int x, int y, int w, int h);
 void RevealArea(int cx, int cy, int radius);
+void MarkFogDirty(void);   // call after any direct write to fog[][] (reveal, load)
+int IsFogDirty(void);      // used by the baked-fog renderer in map.c
+void ClearFogDirty(void);
 
 #endif

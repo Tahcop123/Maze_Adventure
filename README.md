@@ -58,12 +58,20 @@ Or manually / 或手动：
 
 ```bash
 cd src
-gcc -o ..\maze.exe -std=gnu99 -O2 -I. -ILinkedlist ^
+gcc -o ..\maze.exe -std=gnu99 -O2 -Wall -Wextra -I. ^
   maze.c map.c solution.c event.c Interface.c file.c filedialog.c ^
   particle.c enemy.c item.c fog.c level.c audio.c save.c fpview.c ^
-  Linkedlist/linkedlist.c ^
   -lraylib -lopengl32 -lgdi32 -lwinmm -lcomdlg32 -lshell32
 ```
+
+> **CRT note / 运行库说明**: the official prebuilt `libraylib.a` is UCRT-based.
+> Linking it against an **MSVCRT-based** MinGW (e.g. mingw-builds 8.x) mixes
+> runtimes and crashes at startup. Either use the MSYS2 UCRT64 toolchain
+> (recommended), or link the DLL instead — `-lraylibdll` — and keep
+> `raylib.dll` next to `maze.exe` (that is how the shipped binary is built).
+> 官方预编译 `libraylib.a` 基于 UCRT；若用 MSVCRT 版 MinGW 静态链接会因混用
+> 运行库启动即崩溃。请改用 MSYS2 UCRT64 工具链，或改链 DLL
+> （`-lraylibdll`，并把 `raylib.dll` 放到 `maze.exe` 旁边）。
 
 Then run `maze.exe`. High scores, achievements and the save file are written
 next to the executable.
@@ -87,6 +95,7 @@ Pick up coins and gems for extra score; avoid enemies and traps.
 | `Space` / 空格 | Attack / 攻击 |
 | `V` | Toggle first-person / top-down / 切换第一人称/俯视 |
 | `1` `2` `3` `4` | Bomb / Speed / Shield / Torch / 用炸弹/加速/护盾/火把 |
+| `M` | Toggle music / 音乐开关 |
 | `Esc` or `P` / Esc 或 P | Pause menu / 暂停菜单 |
 | `F2` | New random map / 随机新地图 |
 | `F3` | Toggle map edit mode / 开关地图编辑 |
@@ -119,22 +128,45 @@ MazeGame/
 ├── build.bat               # one-click Windows build / 一键构建
 ├── src/
 │   ├── *.c / *.h           # game source / 游戏源码
-│   └── Linkedlist/         # wall-node list for renderer & editor
+│   └── Linkedlist/         # unused legacy module (safe to delete) / 未使用的旧模块（可删除）
 ├── legacy/maze/            # original console course-design sources / 旧版源码
 └── scripts/                # misc helper scripts / 辅助脚本
 ```
 
 ## Status / 当前状态
 
-All blocking gameplay bugs from the review have been fixed: win/lose flow,
-next-level transition, first-person cell interactions, entity reset on restart,
-full save/load, colored-key spawn points, and all 15 achievements. Remaining
-optional work: frame-time refactor, audio mixer hardening, resolution-independent
-layout, and rendering polish (distance fog, instanced walls, textured floors).
+All blocking gameplay bugs from the original review are fixed. A four-phase
+optimization pass has since been applied:
 
-审查报告中的所有阻断性 bug 已修复：胜负流程、下一关切换、第一人称格子交互、
-重开实体重置、完整存读档、彩钥匙生成、全部 15 个成就。后续可选改进：
-帧时间重构、音频混音、分辨率自适应、渲染优化（距离雾、实例化墙、地板纹理）。
+- **Rendering perf** — the static maze and fog-of-war layers are baked into
+  RenderTextures and only re-baked when the map/fog changes; vignettes and the
+  menu gradient are pre-baked textures; light glows use one shared radial
+  gradient; the BFS solution is cached and recomputed only when stale; the
+  wall linked-list was replaced by O(1) grid math.
+- **Bug fixes** — ice slide moved in the wrong direction; audio now uses an
+  8-voice mixer so two-tone effects play both notes; animations no longer run
+  while paused; score accumulates across levels; screen-shake math is safe.
+- **Robustness** — save files are fully staged and validated before loading
+  (entity counts, player position, door positions); save/load reports success
+  or failure in the HUD; file dialogs run at a clean frame boundary.
+- **Cleanliness** — cell codes replaced by named constants, dead code removed,
+  `snprintf` everywhere, `-Wall -Wextra` clean.
+
+The `src/Linkedlist/` folder is no longer part of the build and can be deleted.
+
+原审查报告的阻断性 bug 均已修复，并完成了一轮四阶段优化：
+
+- **渲染性能** —— 静态迷宫层与战争迷雾烘焙为 RenderTexture，仅在地图/迷雾变化时
+  重烘焙；暗角、菜单渐变改为预生成纹理；光晕共用一张径向渐变图；BFS 解法缓存，
+  仅在失效时重算；墙壁链表替换为 O(1) 网格坐标计算。
+- **Bug 修复** —— 冰面滑行方向错误；音频改为 8 声部混音器，双音效可完整播放；
+  暂停时动画不再走动；跨关分数累计；震屏数学安全化。
+- **健壮性** —— 读档前完整暂存并校验（实体数量、玩家坐标、门坐标）；
+  存/读档结果在 HUD 反馈；文件对话框在帧边界统一处理。
+- **代码整洁** —— 格子类型改用命名常量、清理死代码、统一 `snprintf`、
+  `-Wall -Wextra` 无警告。
+
+`src/Linkedlist/` 已不参与编译，可安全删除。
 
 ## License / 许可
 

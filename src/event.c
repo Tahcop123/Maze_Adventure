@@ -5,7 +5,10 @@
 
 static int is_mousedown = 0;
 static int last_gx = -1, last_gy = -1;
-static int iceSlideDir = -1;
+// Ice slide: keep the raw direction (the old packed-dir encoding decoded
+// left/up/right onto the wrong axes)
+static int iceSliding = 0;
+static int iceSlideDx = 0, iceSlideDy = 0;
 static float iceSlideTimer = 0;
 static float moveCooldown = 0;
 
@@ -30,19 +33,17 @@ void MovePlayer(int dx, int dy)
     }
 
     // Door check
-    if (map_change[nx][ny] >= 10 && map_change[nx][ny] <= 12) {
-        int doorIdx = map_change[nx][ny] - 10;
+    if (map_change[nx][ny] >= CELL_DOOR_RED && map_change[nx][ny] <= CELL_DOOR_GREEN) {
+        int doorIdx = map_change[nx][ny] - CELL_DOOR_RED;
         if (keysCollected[doorIdx]) {
-            map_change[nx][ny] = 0;
+            map_change[nx][ny] = CELL_ROAD;
             PlayDoorSound();
+            MarkMazeDirty(); // doors render as 3D cubes in FP mode
         } else return;
     }
 
     // Reached end without key
-    if (map_change[nx][ny] == 5 && is_key == 0) return;
-
-    // Start timer
-    if (!is_start) { start = (int)clock(); is_start = 1; }
+    if (map_change[nx][ny] == CELL_EXIT && is_key == 0) return;
 
     // Valid move
     X = nx;
@@ -69,7 +70,9 @@ void MovePlayer(int dx, int dy)
 
     // Ice slide
     if (iceMap[X][Y]) {
-        iceSlideDir = dx * 2 + (dy > 0 ? 1 : (dy < 0 ? 0 : -1));
+        iceSlideDx = dx;
+        iceSlideDy = dy;
+        iceSliding = 1;
         iceSlideTimer = 0.08f;
         iceSlideCount++;
         if (iceSlideCount >= 10) UnlockAchievement(13); // Ice Skater
@@ -94,6 +97,9 @@ static void HandleKeyboard(void)
         }
     }
 
+    // Music toggle (works in every state, like a media key)
+    if (IsKeyPressed(KEY_M)) ToggleBGM();
+
     if (gameState != STATE_MAZE) return;
 
     // Sprint stamina (consumed in both modes)
@@ -102,21 +108,14 @@ static void HandleKeyboard(void)
     if (isSprinting) stamina -= 30.0f * GetFrameTime();
 
     // Ice sliding (grid movement only)
-    if (!fpMode && iceSlideTimer > 0) {
+    if (!fpMode && iceSliding) {
         iceSlideTimer -= GetFrameTime();
-        if (iceSlideTimer <= 0 && iceSlideDir >= 0) {
-            int sdx = 0, sdy = 0;
-            if (iceSlideDir == 0) sdx = -1;
-            else if (iceSlideDir == 1) sdx = 1;
-            else if (iceSlideDir == 2) sdy = -1;
-            else if (iceSlideDir == 3) sdy = 1;
-            if (sdx != 0 || sdy != 0) {
-                int nx = X + sdx, ny = Y + sdy;
-                if (CanMoveTo(nx, ny) > 0 && iceMap[nx][ny]) {
-                    MovePlayer(sdx, sdy);
-                } else {
-                    iceSlideDir = -1;
-                }
+        if (iceSlideTimer <= 0) {
+            int nx = X + iceSlideDx, ny = Y + iceSlideDy;
+            if (CanMoveTo(nx, ny) > 0 && iceMap[nx][ny]) {
+                MovePlayer(iceSlideDx, iceSlideDy);
+            } else {
+                iceSliding = 0;
             }
         }
     }
@@ -132,7 +131,7 @@ static void HandleKeyboard(void)
         else if (IsKeyDown(KEY_LEFT) || IsKeyDown(KEY_A)) dy = -1;
         else if (IsKeyDown(KEY_RIGHT) || IsKeyDown(KEY_D)) dy = 1;
 
-        if ((dx != 0 || dy != 0) && moveCooldown <= 0 && iceSlideTimer <= 0) {
+        if ((dx != 0 || dy != 0) && moveCooldown <= 0 && !iceSliding) {
             MovePlayer(dx, dy);
             moveCooldown = moveDelay;
             if (dx == -1) playerDir = 0;
@@ -157,26 +156,16 @@ static void HandleKeyboard(void)
     // Function keys (F-series to avoid WASD conflicts; work in both modes)
     if (IsKeyPressed(KEY_F2)) { mapSeed = 0; StartLevel(currentLevel); }
     if (IsKeyPressed(KEY_F3) && !fpMode) { is_edit = !is_edit; is_showsolution = 0; is_showtip = 0; }
-    if (IsKeyPressed(KEY_F5)) Savefile();
-    if (IsKeyPressed(KEY_F9)) {
-        Openfile();
-        InitMapEntities(); InitEnemies(); InitItems();
-        CreatWalllist();
-        InitFog();
-        X = Y = 2; step = 0; is_key = 0;
-        is_start = 0; OptimalSolution();
-        if (shortstep <= 0) shortstep = 50;
-        Hp = shortstep * 2;
-        UpdateFog();
-    }
+    if (IsKeyPressed(KEY_F5)) pendingAction = PENDING_SAVE_MAP;
+    if (IsKeyPressed(KEY_F9)) pendingAction = PENDING_OPEN_MAP;
 
     // Edit mode (top-down only)
     if (!fpMode && is_edit) {
         Vector2 mouse = GetMousePosition();
-        WallT ptr = SelectNearestNode(Wall, mouse.x, mouse.y);
-        if (ptr != NULL) {
-            if (IsKeyPressed(KEY_Q)) map_change[ptr->x0][ptr->y0] = 3;
-            if (IsKeyPressed(KEY_W)) map_change[ptr->x0][ptr->y0] = 0;
+        int gx, gy;
+        if (ScreenToCell(mouse.x, mouse.y, &gx, &gy)) {
+            if (IsKeyPressed(KEY_Q)) { map_change[gx][gy] = CELL_WALL; MarkMazeDirty(); }
+            if (IsKeyPressed(KEY_W)) { map_change[gx][gy] = CELL_ROAD; MarkMazeDirty(); }
         }
     }
 }
@@ -185,19 +174,20 @@ static void HandleMouseEdit(void)
 {
     if (!is_edit || gameState != STATE_MAZE) return;
     Vector2 mouse = GetMousePosition();
+    int gx, gy;
     if (IsMouseButtonPressed(MOUSE_BUTTON_LEFT)) {
         is_mousedown = 1;
-        WallT ptr = SelectNearestNode(Wall, mouse.x, mouse.y);
-        if (ptr != NULL) { last_gx = ptr->x0; last_gy = ptr->y0; }
+        if (ScreenToCell(mouse.x, mouse.y, &gx, &gy)) { last_gx = gx; last_gy = gy; }
     }
-    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && is_mousedown) {
-        WallT ptr = SelectNearestNode(Wall, mouse.x, mouse.y);
-        if (ptr != NULL && (ptr->x0 != last_gx || ptr->y0 != last_gy)) {
+    if (IsMouseButtonDown(MOUSE_BUTTON_LEFT) && is_mousedown &&
+        ScreenToCell(mouse.x, mouse.y, &gx, &gy)) {
+        if (gx != last_gx || gy != last_gy) {
             int tmp = map_change[last_gx][last_gy];
-            map_change[last_gx][last_gy] = map_change[ptr->x0][ptr->y0];
-            map_change[ptr->x0][ptr->y0] = tmp;
-            if (last_gx == X && last_gy == Y) { X = ptr->x0; Y = ptr->y0; }
-            last_gx = ptr->x0; last_gy = ptr->y0;
+            map_change[last_gx][last_gy] = map_change[gx][gy];
+            map_change[gx][gy] = tmp;
+            if (last_gx == X && last_gy == Y) { X = gx; Y = gy; }
+            last_gx = gx; last_gy = gy;
+            MarkMazeDirty();
         }
     }
     if (IsMouseButtonReleased(MOUSE_BUTTON_LEFT)) {

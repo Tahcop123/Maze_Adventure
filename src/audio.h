@@ -2,6 +2,8 @@
 #define _AUDIO_H
 
 void InitAudio(void);
+void ToggleBGM(void);
+int IsBGMOn(void);
 void PlayMoveSound(void);
 void PlayKeySound(void);
 void PlayCoinSound(void);

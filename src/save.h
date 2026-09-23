@@ -22,7 +22,7 @@ void LoadAchievements(void);
 void SaveAchievements(void);
 void UnlockAchievement(int id);
 int IsAchievementUnlocked(int id);
-void SaveGame(void);
+int SaveGame(void);
 int LoadGame(void);
 void CheckAchievements(void);
 

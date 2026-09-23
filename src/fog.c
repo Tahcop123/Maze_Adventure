@@ -8,6 +8,7 @@ void InitFog(void)
     for (int i = 0; i < 100; i++)
         for (int j = 0; j < 100; j++)
             fog[i][j] = 0;
+    MarkFogDirty();
 }
 
 void RevealArea(int cx, int cy, int radius)
@@ -23,6 +24,25 @@ void RevealArea(int cx, int cy, int radius)
             }
         }
     }
+    MarkFogDirty();
+}
+
+// Dirty flag for the baked fog layer (see map.c BakeFog)
+static int fogDirty = 1;
+
+void MarkFogDirty(void)
+{
+    fogDirty = 1;
+}
+
+int IsFogDirty(void)
+{
+    return fogDirty;
+}
+
+void ClearFogDirty(void)
+{
+    fogDirty = 0;
 }
 
 void UpdateFog(void)
@@ -69,11 +89,11 @@ void DrawMinimap(int x, int y, int w, int h)
             float py = y + (i - 1) * cellH;
             int v = map_change[i][j];
             Color c;
-            if (v == 3 || v == -1) c = (Color){80, 80, 90, 255};
-            else if (v == 1) c = (Color){0, 200, 200, 200};
-            else if (v == 2) c = GOLD;
-            else if (v == 4) c = GREEN;
-            else if (v == 5) c = RED;
+            if (v == CELL_WALL || v == CELL_BORDER) c = (Color){80, 80, 90, 255};
+            else if (v == CELL_PATH) c = (Color){0, 200, 200, 200};
+            else if (v == CELL_KEY) c = GOLD;
+            else if (v == CELL_START) c = GREEN;
+            else if (v == CELL_EXIT) c = RED;
             else c = (Color){180, 180, 170, 255};
             DrawRectangle((int)px, (int)py, (int)(cellW + 1), (int)(cellH + 1), c);
         }

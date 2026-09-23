@@ -4,6 +4,17 @@
 GameState gameState = STATE_MENU;
 int screenWidth = 1280;
 int screenHeight = 800;
+PendingAction pendingAction = PENDING_NONE;
+
+// Transient HUD feedback for save/load actions
+static float hudMsgTime = 0;
+static char hudMsg[64] = {0};
+
+static void ShowHudMsg(const char *msg)
+{
+    snprintf(hudMsg, sizeof(hudMsg), "%s", msg);
+    hudMsgTime = 2.0f;
+}
 
 // Character & Level
 int selectedCharacter = CHAR_KNIGHT;
@@ -45,9 +56,6 @@ int doorExists[3] = {0, 0, 0};
 // Screen shake
 float shakeAmount = 0;
 float shakeTime = 0;
-
-// Weather
-int weatherType = 0;
 
 // Game over reason
 int gameOverReason = 0;
@@ -115,6 +123,16 @@ void AddScore(int points)
     score += points;
 }
 
+// Menu torch-flicker particles (update side; spawn no longer lives in DrawInterface)
+static void UpdateMenuAmbient(void)
+{
+    if (rand() % 3 == 0) {
+        SpawnParticle(rand() % screenWidth, screenHeight * 0.3f + rand() % (int)(screenHeight*0.4f),
+                      (float)(rand()%100-50)/50.0f, -1.0f - (float)(rand()%50)/50.0f,
+                      1.5f, 3.0f, (Color){255, 150+rand()%80, 50, 200});
+    }
+}
+
 // ========== Game Init ==========
 static void InitGame(void)
 {
@@ -126,6 +144,20 @@ static void InitGame(void)
 }
 
 // ========== Drawing ==========
+// The BFS solution is only recomputed when the player moved or the map
+// changed - never once per frame.
+static int solCacheX = -1, solCacheY = -1;
+static unsigned int solCacheVersion = 0;
+
+static void UpdateSolutionCache(void)
+{
+    if (X == solCacheX && Y == solCacheY && solCacheVersion == GetMazeVersion()) return;
+    OptimalSolution();
+    solCacheX = X;
+    solCacheY = Y;
+    solCacheVersion = GetMazeVersion();
+}
+
 static void DrawCollectibles(void)
 {
     for (int i = 0; i < coinCount; i++) {
@@ -133,7 +165,6 @@ static void DrawCollectibles(void)
         if (!IsExplored(coins[i].x, coins[i].y)) continue;
         double px = gridOffsetX + (coins[i].y - 0.5) * cellSize;
         double py = gridOffsetY + (coins[i].x - 0.5) * cellSize;
-        coins[i].animTime += GetFrameTime();
         float bob = sinf(coins[i].animTime * 3.0f) * cellSize * 0.05f;
         if (coins[i].value >= 50) {
             // Gem
@@ -251,7 +282,7 @@ static void DrawInventoryHUD(void)
         DrawRectangleRoundedLines((Rectangle){bx, iy, 55, 55}, 0.15, 4, (Color){200,200,210,200});
         DrawText(icons[i], bx + 5, iy + 3, 12, WHITE);
         char count[8];
-        sprintf(count, "x%d", inventory[i]);
+        snprintf(count, sizeof(count), "x%d", inventory[i]);
         DrawText(count, bx + 15, iy + 25, 16, WHITE);
         DrawText(names[i], bx + 5, iy + 58, 10, (Color){180,180,190,200});
     }
@@ -271,8 +302,10 @@ static void DrawGame(void)
     Camera2D cam = {0};
     cam.zoom = 1.0f;
     if (shakeTime > 0) {
-        cam.target = (Vector2){(float)(rand() % (int)shakeAmount - shakeAmount/2), (float)(rand() % (int)shakeAmount - shakeAmount/2)};
-        cam.offset = (Vector2){-cam.target.x, -cam.target.y};
+        float ox = ((rand() / (float)RAND_MAX) - 0.5f) * shakeAmount;
+        float oy = ((rand() / (float)RAND_MAX) - 0.5f) * shakeAmount;
+        cam.target = (Vector2){ox, oy};
+        cam.offset = (Vector2){-ox, -oy};
     }
     if (fpMode) {
         // First person raycasting view
@@ -280,9 +313,9 @@ static void DrawGame(void)
     } else {
         BeginMode2D(cam);
 
-        // Draw maze base
+        // Draw maze base (solution BFS runs only when stale, not per frame)
         if (is_showsolution) {
-            OptimalSolution();
+            UpdateSolutionCache();
             Drawmap(map);
         } else {
             Drawmap(map_change);
@@ -300,7 +333,7 @@ static void DrawGame(void)
 
         // Tip highlight
         if (is_showtip && !is_showsolution) {
-            OptimalSolution();
+            UpdateSolutionCache();
             double px = gridOffsetX + (yy - 0.5) * cellSize;
             double py = gridOffsetY + (xx - 0.5) * cellSize;
             DrawRectangle((int)(px - cellSize/2), (int)(py - cellSize/2), (int)cellSize, (int)cellSize, (Color){0, 220, 220, 150});
@@ -315,10 +348,10 @@ static void DrawGame(void)
         // Edit mode
         if (is_edit) {
             Vector2 mouse = GetMousePosition();
-            WallT ptr = SelectNearestNode(Wall, mouse.x, mouse.y);
-            if (ptr != NULL) {
-                double px = gridOffsetX + (ptr->y0 - 1) * cellSize;
-                double py = gridOffsetY + (ptr->x0 - 1) * cellSize;
+            int gx, gy;
+            if (ScreenToCell(mouse.x, mouse.y, &gx, &gy)) {
+                double px = gridOffsetX + (gy - 1) * cellSize;
+                double py = gridOffsetY + (gx - 1) * cellSize;
                 DrawRectangleLines((int)px, (int)py, (int)cellSize, (int)cellSize, RED);
             }
         }
@@ -350,7 +383,7 @@ static void DrawGame(void)
     // Time limit
     if (timedMode) {
         char timeStr[32];
-        sprintf(timeStr, "Time: %.0f", timeRemaining);
+        snprintf(timeStr, sizeof(timeStr), "Time: %.0f", timeRemaining);
         Color tc = (timeRemaining < 15) ? RED : WHITE;
         DrawText(timeStr, screenWidth / 2 - 40, 50, 24, tc);
     }
@@ -365,10 +398,18 @@ static void DrawPauseMenu(void)
     int bw = 200, bh = 45, bx = (screenWidth - bw) / 2, by = 250;
     if (Button(bx, by, bw, bh, "Resume", (Color){50, 150, 80, 255}, WHITE)) { gameState = STATE_MAZE; return; }
     by += bh + 15;
-    // Save/Load do file I/O (slow): return so later buttons can't re-trigger
-    if (Button(bx, by, bw, bh, "Save Game", (Color){50, 120, 180, 255}, WHITE)) { SaveGame(); gameState = STATE_MAZE; return; }
+    // Save/Load do file I/O: return so later buttons can't re-trigger, and
+    // report the outcome instead of failing silently
+    if (Button(bx, by, bw, bh, "Save Game", (Color){50, 120, 180, 255}, WHITE)) {
+        ShowHudMsg(SaveGame() ? "Game saved" : "Save failed!");
+        gameState = STATE_MAZE;
+        return;
+    }
     by += bh + 15;
-    if (Button(bx, by, bw, bh, "Load Game", (Color){120, 100, 180, 255}, WHITE)) { LoadGame(); return; }
+    if (Button(bx, by, bw, bh, "Load Game", (Color){120, 100, 180, 255}, WHITE)) {
+        if (!LoadGame()) ShowHudMsg("Load failed (no save file?)");
+        return; // LoadGame switches to STATE_MAZE itself on success
+    }
     by += bh + 15;
     if (Button(bx, by, bw, bh, "Quit to Menu", (Color){180, 80, 80, 255}, WHITE)) { gameState = STATE_MENU; return; }
 }
@@ -383,11 +424,11 @@ static void DrawGameOver(void)
     DrawText(reason, (screenWidth - MeasureText(reason, 24)) / 2, 200, 24, (Color){255, 150, 150, 255});
 
     char scoreStr[64];
-    sprintf(scoreStr, "Score: %d  |  Steps: %d  |  Level: %d", score, step, currentLevel + 1);
+    snprintf(scoreStr, sizeof(scoreStr), "Score: %d  |  Steps: %d  |  Level: %d", score, step, currentLevel + 1);
     DrawText(scoreStr, (screenWidth - MeasureText(scoreStr, 22)) / 2, 260, 22, WHITE);
 
     int bw = 200, bh = 45, bx = (screenWidth - bw) / 2, by = 340;
-    if (Button(bx, by, bw, bh, "Retry Level", (Color){50, 150, 80, 255}, WHITE)) { StartLevel(currentLevel); gameState = STATE_MAZE; return; }
+    if (Button(bx, by, bw, bh, "Retry Level", (Color){50, 150, 80, 255}, WHITE)) { score = 0; StartLevel(currentLevel); gameState = STATE_MAZE; return; }
     by += bh + 15;
     if (Button(bx, by, bw, bh, "Main Menu", (Color){100, 100, 120, 255}, WHITE)) { gameState = STATE_MENU; return; }
 }
@@ -399,11 +440,11 @@ static void DrawWin(void)
     DrawText(title, (screenWidth - MeasureText(title, 56)) / 2, 120, 56, (Color){100, 255, 100, 255});
 
     char scoreStr[64];
-    sprintf(scoreStr, "Final Score: %d  |  Steps: %d", score, step);
+    snprintf(scoreStr, sizeof(scoreStr), "Final Score: %d  |  Steps: %d", score, step);
     DrawText(scoreStr, (screenWidth - MeasureText(scoreStr, 24)) / 2, 210, 24, WHITE);
 
     char collectStr[64];
-    sprintf(collectStr, "Coins: %d/%d  |  Gems: %d/%d", coinsCollected, totalCoins, gemsCollected, totalGems);
+    snprintf(collectStr, sizeof(collectStr), "Coins: %d/%d  |  Gems: %d/%d", coinsCollected, totalCoins, gemsCollected, totalGems);
     DrawText(collectStr, (screenWidth - MeasureText(collectStr, 20)) / 2, 255, 20, (Color){200, 200, 200, 255});
 
     int bw = 200, bh = 45, bx = (screenWidth - bw) / 2, by = 330;
@@ -621,24 +662,34 @@ int main(void)
     while (!WindowShouldClose()) {
         HandleInput();
 
+        // Per-state ambient updates (kept out of the draw functions)
+        if (gameState == STATE_MENU) {
+            UpdateMenuAmbient();
+            UpdateParticles();
+        }
+
         // Game logic updates (only when playing)
         if (gameState == STATE_MAZE) {
+            float dt = GetFrameTime();
             UpdateEnemies();
             UpdateTraps();
             UpdateFog();
             UpdateParticles();
+            UpdateCollectibles(dt);
+            UpdateItems(dt);
+            SpawnAmbientParticles();
             UpdateEffects();
             UpdateWalkBob();
-            UpdateAnimation(GetFrameTime());
-            UpdateFPView(GetFrameTime());
+            UpdateAnimation(dt);
+            UpdateFPView(dt);
 
             // Stamina regen
-            if (!isSprinting && stamina < maxStamina) stamina += 20.0f * GetFrameTime();
+            if (!isSprinting && stamina < maxStamina) stamina += 20.0f * dt;
             if (stamina > maxStamina) stamina = maxStamina;
 
             // Time limit
             if (timedMode) {
-                timeRemaining -= GetFrameTime();
+                timeRemaining -= dt;
                 if (timeRemaining <= 0) {
                     timeRemaining = 0;
                     gameOverReason = 1;
@@ -648,7 +699,7 @@ int main(void)
             }
 
             // Check win condition -- single authority for victory
-            if (map_change[X][Y] == 5 && is_key) {
+            if (map_change[X][Y] == CELL_EXIT && is_key) {
                 AddScore(200 + Hp * 2);
                 CheckAchievements();
                 PlayWinSound();
@@ -657,6 +708,17 @@ int main(void)
             }
             // Enemy contact is handled by UpdateEnemies -> EnemyAttackPlayer:
             // one damage path with attack cooldown, shield and safe knockback.
+        }
+
+        // Modal file dialogs run at a clean frame boundary, not mid-frame
+        if (pendingAction != PENDING_NONE) {
+            if (pendingAction == PENDING_SAVE_MAP) {
+                Savefile();
+            } else if (pendingAction == PENDING_OPEN_MAP && gameState == STATE_MAZE) {
+                Openfile();
+                LoadMapAndReset();
+            }
+            pendingAction = PENDING_NONE;
         }
 
         BeginDrawing();
@@ -674,6 +736,13 @@ int main(void)
             case STATE_LEADERBOARD: DrawLeaderboard(); break;
             case STATE_ACHIEVEMENTS: DrawAchievements(); break;
             default: ClearBackground(RAYWHITE); break;
+        }
+
+        // Transient save/load feedback (drawn over any state)
+        if (hudMsgTime > 0) {
+            hudMsgTime -= GetFrameTime();
+            int msgW = MeasureText(hudMsg, 20);
+            DrawText(hudMsg, (screenWidth - msgW) / 2, screenHeight - 100, 20, (Color){255, 255, 180, 230});
         }
 
         EndDrawing();

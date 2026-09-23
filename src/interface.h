@@ -6,9 +6,6 @@
 #include "solution.h"
 
 extern int is_edit;
-extern int is_file;
-extern int is_e;
-extern int is_help;
 
 void DrawInterface(void);
 void DrawTopBar(void);

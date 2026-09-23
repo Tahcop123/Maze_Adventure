@@ -18,5 +18,6 @@ extern LevelConfig levelConfigs[3];
 void StartLevel(int level);
 void NextLevel(void);
 void GenerateLevelContent(void);
+void LoadMapAndReset(void);
 
 #endif
