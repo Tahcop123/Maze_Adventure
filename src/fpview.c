@@ -180,6 +180,17 @@ static int CircleCollides(float cx, float cy, float r)
 
 static void TryMove(float dx, float dy)
 {
+    // Unlock a door as soon as the player's collision circle reaches it.
+    // Checking the centre alone never works: the circle stops before crossing
+    // the cell boundary, so the target cell would remain the current cell.
+    if (dx != 0) {
+        float edgeX = fpPosX + dx + (dx > 0 ? PLAYER_RADIUS : -PLAYER_RADIUS);
+        OpenDoorIfUnlocked((int)(fpPosY + dy), (int)edgeX);
+    }
+    if (dy != 0) {
+        float edgeY = fpPosY + dy + (dy > 0 ? PLAYER_RADIUS : -PLAYER_RADIUS);
+        OpenDoorIfUnlocked((int)edgeY, (int)(fpPosX + dx));
+    }
     if (!CircleCollides(fpPosX+dx, fpPosY+dy, PLAYER_RADIUS)) {
         fpPosX+=dx; fpPosY+=dy; return;
     }

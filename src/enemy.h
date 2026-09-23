@@ -31,7 +31,7 @@ extern int enemyCount;
 
 void InitEnemies(void);
 void SpawnEnemy(int x, int y, int type);
-void UpdateEnemies(void);
+void UpdateEnemies(float dt);
 void DrawEnemies(void);
 
 // Combat

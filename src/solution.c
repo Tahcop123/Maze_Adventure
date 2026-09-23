@@ -79,12 +79,20 @@ void OptimalSolution(void)
 
     entry.x = X;
     entry.y = Y;
+    destination.x = destination.y = -1;
     for (i = 1; i <= Row; i++)
         for (j = 1; j <= Col; j++)
             if (map[i][j] == 5) {
                 destination.x = i;
                 destination.y = j;
             }
+
+    if (destination.x < 1) {
+        shortstep = 0;
+        xx = X;
+        yy = Y;
+        return;
+    }
 
     int kx = -1, ky = -1;
     for (i = 1; i <= Row; i++)

@@ -16,6 +16,7 @@ typedef struct {
 extern LevelConfig levelConfigs[3];
 
 void StartLevel(int level);
+void ResetRunState(void);
 void NextLevel(void);
 void GenerateLevelContent(void);
 void LoadMapAndReset(void);

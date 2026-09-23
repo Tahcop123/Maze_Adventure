@@ -126,7 +126,7 @@ void DrawInterface(void)
     // make a later button also register as pressed and overwrite gameState.
     if (Button(bx, by, bw, bh, "Start Game", (Color){50, 150, 80, 255}, WHITE)) {
         mapSeed = 0; // roll a fresh seed; selected difficulty picks the start level
-        score = 0;   // fresh run (kept across NextLevel, reset on new run/retry)
+        ResetRunState();
         StartLevel(difficulty);
         gameState = STATE_MAZE;
         return;

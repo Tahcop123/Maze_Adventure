@@ -54,6 +54,10 @@ Tested with **MSYS2 UCRT64 GCC 15.x** (add `D:\msys64\ucrt64\bin` to `PATH`).
 build.bat
 ```
 
+For a logic regression check with the same MSYS2 GCC toolchain, run
+`pwsh -File tests/run_tests.ps1` from this folder.
+测试覆盖地图导入、彩门、隐藏房间、开局状态和按时间推进的敌人/陷阱。
+
 Or manually / 或手动：
 
 ```bash

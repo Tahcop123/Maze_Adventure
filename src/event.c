@@ -32,15 +32,7 @@ void MovePlayer(int dx, int dy)
         if (!TryPushBox(nx, ny, dx, dy)) return;
     }
 
-    // Door check
-    if (map_change[nx][ny] >= CELL_DOOR_RED && map_change[nx][ny] <= CELL_DOOR_GREEN) {
-        int doorIdx = map_change[nx][ny] - CELL_DOOR_RED;
-        if (keysCollected[doorIdx]) {
-            map_change[nx][ny] = CELL_ROAD;
-            PlayDoorSound();
-            MarkMazeDirty(); // doors render as 3D cubes in FP mode
-        } else return;
-    }
+    if (!OpenDoorIfUnlocked(nx, ny)) return;
 
     // Reached end without key
     if (map_change[nx][ny] == CELL_EXIT && is_key == 0) return;
@@ -154,7 +146,7 @@ static void HandleKeyboard(void)
     if (IsKeyPressed(KEY_FOUR)) UseItem(ITEM_TORCH);
 
     // Function keys (F-series to avoid WASD conflicts; work in both modes)
-    if (IsKeyPressed(KEY_F2)) { mapSeed = 0; StartLevel(currentLevel); }
+    if (IsKeyPressed(KEY_F2)) { mapSeed = 0; ResetRunState(); StartLevel(currentLevel); }
     if (IsKeyPressed(KEY_F3) && !fpMode) { is_edit = !is_edit; is_showsolution = 0; is_showtip = 0; }
     if (IsKeyPressed(KEY_F5)) pendingAction = PENDING_SAVE_MAP;
     if (IsKeyPressed(KEY_F9)) pendingAction = PENDING_OPEN_MAP;

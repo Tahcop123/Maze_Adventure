@@ -3,6 +3,7 @@
 
 Enemy enemies[MAX_ENEMIES];
 int enemyCount = 0;
+static float moveTickFraction = 0;
 
 void InitEnemies(void)
 {
@@ -10,6 +11,7 @@ void InitEnemies(void)
         enemies[i].active = 0;
     }
     enemyCount = 0;
+    moveTickFraction = 0;
 }
 
 void SpawnEnemy(int x, int y, int type)
@@ -48,9 +50,12 @@ static int EnemyCanMove(int x, int y, int type)
     return 1;
 }
 
-void UpdateEnemies(void)
+void UpdateEnemies(float dt)
 {
-    float dt = GetFrameTime();
+    // Keep the existing speed values (ticks at 60 Hz) while using elapsed time.
+    moveTickFraction += dt * 60.0f;
+    int elapsedTicks = (int)moveTickFraction;
+    moveTickFraction -= elapsedTicks;
     for (int i = 0; i < enemyCount; i++) {
         Enemy *e = &enemies[i];
         if (!e->active) continue;
@@ -64,38 +69,42 @@ void UpdateEnemies(void)
         if (abs(e->x - X) + abs(e->y - Y) <= 1) {
             EnemyAttackPlayer(i);
         }
-        e->moveCounter++;
-        if (e->moveCounter < e->speed) continue;
-        e->moveCounter = 0;
+        if (e->speed <= 0) continue; // malformed save data must not divide by zero
+        if (e->moveCounter < 0 || e->moveCounter >= e->speed)
+            e->moveCounter = 0;
+        e->moveCounter += elapsedTicks;
+        while (e->moveCounter >= e->speed) {
+            e->moveCounter -= e->speed;
 
-        int dx = 0, dy = 0;
-        if (e->type == ENEMY_GHOST) {
-            // Chase player along the more distant axis (no jitter)
-            int adx = abs(X - e->x), ady = abs(Y - e->y);
-            if (adx >= ady) dx = (X > e->x) ? 1 : (X < e->x ? -1 : 0);
-            else dy = (Y > e->y) ? 1 : (Y < e->y ? -1 : 0);
-        } else if (e->type == ENEMY_SKELETON) {
-            // Patrol: keep direction, try several turns when blocked
-            dx = direction[e->dir][0];
-            dy = direction[e->dir][1];
-            if (!EnemyCanMove(e->x + dx, e->y + dy, e->type)) {
-                for (int t = 0; t < 4; t++) {
-                    e->dir = rand() % 4;
-                    dx = direction[e->dir][0];
-                    dy = direction[e->dir][1];
-                    if (EnemyCanMove(e->x + dx, e->y + dy, e->type)) break;
+            int dx = 0, dy = 0;
+            if (e->type == ENEMY_GHOST) {
+                // Chase player along the more distant axis (no jitter)
+                int adx = abs(X - e->x), ady = abs(Y - e->y);
+                if (adx >= ady) dx = (X > e->x) ? 1 : (X < e->x ? -1 : 0);
+                else dy = (Y > e->y) ? 1 : (Y < e->y ? -1 : 0);
+            } else if (e->type == ENEMY_SKELETON) {
+                // Patrol: keep direction, try several turns when blocked
+                dx = direction[e->dir][0];
+                dy = direction[e->dir][1];
+                if (!EnemyCanMove(e->x + dx, e->y + dy, e->type)) {
+                    for (int t = 0; t < 4; t++) {
+                        e->dir = rand() % 4;
+                        dx = direction[e->dir][0];
+                        dy = direction[e->dir][1];
+                        if (EnemyCanMove(e->x + dx, e->y + dy, e->type)) break;
+                    }
                 }
+            } else {
+                // Slime: random
+                e->dir = rand() % 4;
+                dx = direction[e->dir][0];
+                dy = direction[e->dir][1];
             }
-        } else {
-            // Slime: random
-            e->dir = rand() % 4;
-            dx = direction[e->dir][0];
-            dy = direction[e->dir][1];
-        }
 
-        if (EnemyCanMove(e->x + dx, e->y + dy, e->type)) {
-            e->x += dx;
-            e->y += dy;
+            if (EnemyCanMove(e->x + dx, e->y + dy, e->type)) {
+                e->x += dx;
+                e->y += dy;
+            }
         }
     }
 }

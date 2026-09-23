@@ -1,7 +1,8 @@
 #ifndef _FILE_H
 #define _FILE_H
 
-void Openfile(void);
+int Openfile(void);
+int LoadMapFile(const char *filename);
 void Savefile(void);
 
 #endif

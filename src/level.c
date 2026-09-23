@@ -7,6 +7,15 @@ LevelConfig levelConfigs[3] = {
     {30, 40, 1.5f, 5, 5, 35, 4, 120, "Hard"}
 };
 
+void ResetRunState(void)
+{
+    score = 0;
+    kills = 0;
+    bombsUsedTotal = 0;
+    hintsUsed = 0;
+    for (int i = 0; i < 4; i++) inventory[i] = 0;
+}
+
 void StartLevel(int level)
 {
     if (level < 0 || level >= 3) level = 0;
@@ -36,9 +45,10 @@ void StartLevel(int level)
     if (shortstep <= 0) shortstep = 50;
     Hp = (int)(shortstep * cfg->hpMultiplier);
     if (selectedCharacter == CHAR_KNIGHT) Hp += 20;
-    if (selectedCharacter == CHAR_ROGUE) rogueFreeSteps = 10;
+    rogueFreeSteps = (selectedCharacter == CHAR_ROGUE) ? 10 : 0;
 
     stamina = maxStamina;
+    isSprinting = 0;
     // NOTE: score is intentionally NOT reset here - it accumulates across
     // NextLevel(). Fresh runs / retries reset it at their call sites.
     step = 0;
@@ -52,6 +62,8 @@ void StartLevel(int level)
     doorExists[0] = doorExists[1] = doorExists[2] = 0;
     tookDamageThisLevel = 0;
     iceSlideCount = 0;
+    hintsUsed = 0;
+    viewRadius = 4;
     playerDir = 1;
     attackCooldown = 0;
     playerAttacking = 0;
@@ -71,6 +83,7 @@ void StartLevel(int level)
 // Shared by all map-load entry points so they cannot drift apart.
 void LoadMapAndReset(void)
 {
+    ResetRunState();
     cellSize = (double)fmin((screenWidth - 220.0) / Col, (screenHeight - 120.0) / Row);
     gridOffsetX = (screenWidth - Col * cellSize) / 2.0 - 50.0;
     gridOffsetY = 60.0;
@@ -78,13 +91,64 @@ void LoadMapAndReset(void)
     InitEnemies();
     InitItems();
     InitFog();
-    X = Y = 2;
+    coinsCollected = gemsCollected = totalCoins = totalGems = 0;
+    for (int d = 0; d < 3; d++) {
+        keysCollected[d] = 0;
+        doorExists[d] = 0;
+        doorPositions[d][0] = doorPositions[d][1] = 0;
+    }
+    for (int i = 1; i <= Row; i++)
+        for (int j = 1; j <= Col; j++) {
+            int cell = map_change[i][j];
+            if (cell == CELL_COIN || cell == CELL_GEM) {
+                Coin *coin = &coins[coinCount++];
+                coin->x = i;
+                coin->y = j;
+                coin->value = (cell == CELL_GEM) ? 50 : 10;
+                coin->active = 1;
+                coin->animTime = 0;
+                if (cell == CELL_GEM) totalGems++;
+                else totalCoins++;
+                map_change[i][j] = CELL_ROAD;
+            }
+            if (cell >= CELL_DOOR_RED && cell <= CELL_DOOR_GREEN) {
+                int d = cell - CELL_DOOR_RED;
+                doorExists[d] = 1;
+                doorPositions[d][0] = i;
+                doorPositions[d][1] = j;
+            }
+        }
+    // Prefer the map's start marker, then the first traversable cell.
+    X = Y = 0;
+    for (int i = 1; i <= Row; i++)
+        for (int j = 1; j <= Col; j++)
+            if (map_change[i][j] == CELL_START) { X = i; Y = j; }
+    if (X == 0)
+        for (int i = 1; i <= Row && X == 0; i++)
+            for (int j = 1; j <= Col; j++)
+                if (map_change[i][j] == CELL_ROAD) { X = i; Y = j; break; }
     step = 0;
     is_key = 0;
+    timedMode = 0;
+    timeRemaining = 0;
+    mapSeed = 0;
+    viewRadius = 4;
+    playerDir = 1;
+    fpMode = 0;
+    fpMouseLook = 0;
+    EnableCursor();
     MarkMazeDirty();
     OptimalSolution();
     if (shortstep <= 0) shortstep = 50;
     Hp = shortstep * 2;
+    rogueFreeSteps = (selectedCharacter == CHAR_ROGUE) ? 10 : 0;
+    stamina = maxStamina;
+    isSprinting = 0;
+    shieldActive = 0;
+    speedBoostTime = 0;
+    torchBoostTime = 0;
+    tookDamageThisLevel = 0;
+    iceSlideCount = 0;
     UpdateFog();
 }
 

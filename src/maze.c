@@ -428,7 +428,7 @@ static void DrawGameOver(void)
     DrawText(scoreStr, (screenWidth - MeasureText(scoreStr, 22)) / 2, 260, 22, WHITE);
 
     int bw = 200, bh = 45, bx = (screenWidth - bw) / 2, by = 340;
-    if (Button(bx, by, bw, bh, "Retry Level", (Color){50, 150, 80, 255}, WHITE)) { score = 0; StartLevel(currentLevel); gameState = STATE_MAZE; return; }
+    if (Button(bx, by, bw, bh, "Retry Level", (Color){50, 150, 80, 255}, WHITE)) { ResetRunState(); StartLevel(currentLevel); gameState = STATE_MAZE; return; }
     by += bh + 15;
     if (Button(bx, by, bw, bh, "Main Menu", (Color){100, 100, 120, 255}, WHITE)) { gameState = STATE_MENU; return; }
 }
@@ -671,8 +671,8 @@ int main(void)
         // Game logic updates (only when playing)
         if (gameState == STATE_MAZE) {
             float dt = GetFrameTime();
-            UpdateEnemies();
-            UpdateTraps();
+            UpdateEnemies(dt);
+            UpdateTraps(dt);
             UpdateFog();
             UpdateParticles();
             UpdateCollectibles(dt);
@@ -715,8 +715,10 @@ int main(void)
             if (pendingAction == PENDING_SAVE_MAP) {
                 Savefile();
             } else if (pendingAction == PENDING_OPEN_MAP && gameState == STATE_MAZE) {
-                Openfile();
-                LoadMapAndReset();
+                if (Openfile()) {
+                    LoadMapAndReset();
+                    ShowHudMsg("Map loaded");
+                } else ShowHudMsg("Map open cancelled or invalid");
             }
             pendingAction = PENDING_NONE;
         }

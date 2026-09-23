@@ -38,6 +38,7 @@ int plateCount = 0;
 // Hidden room
 int hiddenRoomX = 0, hiddenRoomY = 0;
 int hiddenRoomFound = 0;
+static float trapTickFraction = 0;
 
 // Ice map
 int iceMap[100][100];
@@ -621,6 +622,7 @@ void Judgekey(void)
     if (map_change[X][Y] == CELL_KEY) {
         map_change[X][Y] = CELL_ROAD;
         is_key = 1;
+        MarkMazeDirty();
     }
 }
 
@@ -657,6 +659,12 @@ void OnEnterCell(void)
     CheckTraps();
     CheckPortals();
 
+    if (!hiddenRoomFound && X == hiddenRoomX && Y == hiddenRoomY &&
+        hiddenRoomX > 0 && hiddenRoomY > 0) {
+        hiddenRoomFound = 1;
+        AddScore(100);
+    }
+
     // Multi-key pickup (colored keys)
     if (map_change[X][Y] >= CELL_KEY_RED && map_change[X][Y] <= CELL_KEY_GREEN) {
         int keyIdx = map_change[X][Y] - CELL_KEY_RED;
@@ -680,6 +688,8 @@ void InitMapEntities(void)
     boxCount = 0;
     plateCount = 0;
     hiddenRoomFound = 0;
+    hiddenRoomX = hiddenRoomY = 0;
+    trapTickFraction = 0;
     for (int i = 0; i < 100; i++)
         for (int j = 0; j < 100; j++)
             iceMap[i][j] = 0;
@@ -791,16 +801,30 @@ void SpawnPlates(int count)
 
 void CreateHiddenRoom(void)
 {
-    // Create a 3x3 hidden room at a random edge, behind a breakable wall
-    int side = rand() % 4;
-    int hx, hy;
-    if (side == 0) { hx = 3; hy = rand() % (Col - 6) + 3; }
-    else if (side == 1) { hx = Row - 4; hy = rand() % (Col - 6) + 3; }
-    else if (side == 2) { hx = rand() % (Row - 6) + 3; hy = 3; }
-    else { hx = rand() % (Row - 6) + 3; hy = Col - 4; }
+    // Only carve ordinary wall/road cells, preserving the start, exit and keys.
+    int hx = 0, hy = 0;
+    hiddenRoomX = hiddenRoomY = 0;
+    for (int attempt = 0; attempt < 200; attempt++) {
+        int side = rand() % 4;
+        if (side == 0) { hx = 3; hy = rand() % (Col - 6) + 3; }
+        else if (side == 1) { hx = Row - 4; hy = rand() % (Col - 6) + 3; }
+        else if (side == 2) { hx = rand() % (Row - 6) + 3; hy = 3; }
+        else { hx = rand() % (Row - 6) + 3; hy = Col - 4; }
 
-    hiddenRoomX = hx;
-    hiddenRoomY = hy;
+        int safe = 1, roads = 0;
+        for (int i = -1; i <= 1; i++)
+            for (int j = -1; j <= 1; j++) {
+                int cell = map_change[hx + i][hy + j];
+                if (cell != CELL_WALL && cell != CELL_ROAD) safe = 0;
+                if (cell == CELL_ROAD) roads++;
+            }
+        if (safe && roads > 0) {
+            hiddenRoomX = hx;
+            hiddenRoomY = hy;
+            break;
+        }
+    }
+    if (hiddenRoomX == 0) return;
 
     // Carve room
     for (int i = -1; i <= 1; i++)
@@ -809,24 +833,28 @@ void CreateHiddenRoom(void)
                 map_change[hx+i][hy+j] = CELL_ROAD;
 
     // Put gems and items in room
-    coins[coinCount].x = hx; coins[coinCount].y = hy;
-    coins[coinCount].value = 50; coins[coinCount].active = 1;
-    coins[coinCount].animTime = 0; coinCount++;
+    if (coinCount < MAX_COINS) {
+        coins[coinCount].x = hx; coins[coinCount].y = hy;
+        coins[coinCount].value = 50; coins[coinCount].active = 1;
+        coins[coinCount].animTime = 0; coinCount++;
+    }
 
     SpawnItem(hx, hy + (hy < Col/2 ? 1 : -1), ITEM_BOMB);
     MarkMazeDirty();
 }
 
-void UpdateTraps(void)
+void UpdateTraps(float dt)
 {
+    trapTickFraction += dt * 60.0f;
+    int elapsedTicks = (int)trapTickFraction;
+    trapTickFraction -= elapsedTicks;
     for (int i = 0; i < trapCount; i++) {
         if (traps[i].active) {
-            traps[i].cycle++;
-            if (traps[i].cycle > 120) traps[i].cycle = 0;
+            traps[i].cycle = (traps[i].cycle + elapsedTicks) % 121;
         }
     }
     for (int i = 0; i < portalCount; i++) {
-        if (portals[i].cooldown > 0) portals[i].cooldown -= GetFrameTime();
+        if (portals[i].cooldown > 0) portals[i].cooldown -= dt;
     }
 }
 
@@ -908,6 +936,18 @@ int CanMoveTo(int x, int y)
         if (keysCollected[doorIdx]) return 1; // can open
         return 0;
     }
+    return 1;
+}
+
+int OpenDoorIfUnlocked(int x, int y)
+{
+    if (x < 1 || x > Row || y < 1 || y > Col) return 0;
+    int cell = map_change[x][y];
+    if (cell < CELL_DOOR_RED || cell > CELL_DOOR_GREEN) return 1;
+    if (!keysCollected[cell - CELL_DOOR_RED]) return 0;
+    map_change[x][y] = CELL_ROAD;
+    PlayDoorSound();
+    MarkMazeDirty();
     return 1;
 }
 

@@ -153,11 +153,12 @@ void SpawnPortals(int count);
 void SpawnBoxes(int count);
 void SpawnPlates(int count);
 void CreateHiddenRoom(void);
-void UpdateTraps(void);
+void UpdateTraps(float dt);
 void CheckTraps(void);
 void CheckPortals(void);
 void CheckCollectibles(void);
 int CanMoveTo(int x, int y);
+int OpenDoorIfUnlocked(int x, int y);
 int TryPushBox(int bx, int by, int dx, int dy);
 void ExplodeBomb(int cx, int cy);
 
